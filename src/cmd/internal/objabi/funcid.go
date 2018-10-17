@@ -9,10 +9,11 @@ package objabi
 // Note that in some situations involving plugins, there may be multiple
 // copies of a particular special runtime function.
 // Note: this list must match the list in runtime/symtab.go.
-type FuncID uint32
+type FuncID uint8
 
 const (
 	FuncID_normal FuncID = iota // not a special function
+	FuncID_runtime_main
 	FuncID_goexit
 	FuncID_jmpdefer
 	FuncID_mcall
@@ -22,13 +23,11 @@ const (
 	FuncID_asmcgocall
 	FuncID_sigpanic
 	FuncID_runfinq
-	FuncID_bgsweep
-	FuncID_forcegchelper
-	FuncID_timerproc
 	FuncID_gcBgMarkWorker
 	FuncID_systemstack_switch
 	FuncID_systemstack
 	FuncID_cgocallback_gofunc
 	FuncID_gogo
 	FuncID_externalthreadhandler
+	FuncID_debugCallV1
 )

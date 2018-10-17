@@ -341,3 +341,66 @@ func BenchmarkComplexAlgMap(b *testing.B) {
 		_ = m[k]
 	}
 }
+
+func BenchmarkGoMapClear(b *testing.B) {
+	b.Run("Reflexive", func(b *testing.B) {
+		for size := 1; size < 100000; size *= 10 {
+			b.Run(strconv.Itoa(size), func(b *testing.B) {
+				m := make(map[int]int, size)
+				for i := 0; i < b.N; i++ {
+					m[0] = size // Add one element so len(m) != 0 avoiding fast paths.
+					for k := range m {
+						delete(m, k)
+					}
+				}
+			})
+		}
+	})
+	b.Run("NonReflexive", func(b *testing.B) {
+		for size := 1; size < 100000; size *= 10 {
+			b.Run(strconv.Itoa(size), func(b *testing.B) {
+				m := make(map[float64]int, size)
+				for i := 0; i < b.N; i++ {
+					m[1.0] = size // Add one element so len(m) != 0 avoiding fast paths.
+					for k := range m {
+						delete(m, k)
+					}
+				}
+			})
+		}
+	})
+}
+
+func BenchmarkMapStringConversion(b *testing.B) {
+	for _, length := range []int{32, 64} {
+		b.Run(strconv.Itoa(length), func(b *testing.B) {
+			bytes := make([]byte, length)
+			b.Run("simple", func(b *testing.B) {
+				b.ReportAllocs()
+				m := make(map[string]int)
+				m[string(bytes)] = 0
+				for i := 0; i < b.N; i++ {
+					_ = m[string(bytes)]
+				}
+			})
+			b.Run("struct", func(b *testing.B) {
+				b.ReportAllocs()
+				type stringstruct struct{ s string }
+				m := make(map[stringstruct]int)
+				m[stringstruct{string(bytes)}] = 0
+				for i := 0; i < b.N; i++ {
+					_ = m[stringstruct{string(bytes)}]
+				}
+			})
+			b.Run("array", func(b *testing.B) {
+				b.ReportAllocs()
+				type stringarray [1]string
+				m := make(map[stringarray]int)
+				m[stringarray{string(bytes)}] = 0
+				for i := 0; i < b.N; i++ {
+					_ = m[stringarray{string(bytes)}]
+				}
+			})
+		})
+	}
+}

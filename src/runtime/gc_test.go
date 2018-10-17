@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"runtime"
 	"runtime/debug"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,6 +20,12 @@ import (
 func TestGcSys(t *testing.T) {
 	if os.Getenv("GOGC") == "off" {
 		t.Skip("skipping test; GOGC=off in environment")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping test; GOOS=windows http://golang.org/issue/27156")
+	}
+	if runtime.GOOS == "linux" && runtime.GOARCH == "arm64" {
+		t.Skip("skipping test; GOOS=linux GOARCH=arm64 https://github.com/golang/go/issues/27636")
 	}
 	got := runTestProg(t, "testprog", "GCSys")
 	want := "OK\n"
@@ -155,6 +162,10 @@ func TestHugeGCInfo(t *testing.T) {
 }
 
 func TestPeriodicGC(t *testing.T) {
+	if runtime.GOARCH == "wasm" {
+		t.Skip("no sysmon on wasm yet")
+	}
+
 	// Make sure we're not in the middle of a GC.
 	runtime.GC()
 
@@ -563,8 +574,8 @@ func BenchmarkWriteBarrier(b *testing.B) {
 		n := &node{mkTree(level - 1), mkTree(level - 1)}
 		if level == 10 {
 			// Seed GC with enough early pointers so it
-			// doesn't accidentally switch to mark 2 when
-			// it only has the top of the tree.
+			// doesn't start termination barriers when it
+			// only has the top of the tree.
 			wbRoots = append(wbRoots, n)
 		}
 		return n
@@ -638,4 +649,35 @@ func BenchmarkBulkWriteBarrier(b *testing.B) {
 	})
 
 	runtime.KeepAlive(ptrs)
+}
+
+func BenchmarkScanStackNoLocals(b *testing.B) {
+	var ready sync.WaitGroup
+	teardown := make(chan bool)
+	for j := 0; j < 10; j++ {
+		ready.Add(1)
+		go func() {
+			x := 100000
+			countpwg(&x, &ready, teardown)
+		}()
+	}
+	ready.Wait()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StartTimer()
+		runtime.GC()
+		runtime.GC()
+		b.StopTimer()
+	}
+	close(teardown)
+}
+
+func countpwg(n *int, ready *sync.WaitGroup, teardown chan bool) {
+	if *n == 0 {
+		ready.Done()
+		<-teardown
+		return
+	}
+	*n--
+	countpwg(n, ready, teardown)
 }

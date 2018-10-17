@@ -34,8 +34,9 @@ type ptabEntry struct {
 
 // runtime interface and reflection data structures
 var (
-	signatsetmu sync.Mutex // protects signatset
+	signatmu    sync.Mutex // protects signatset and signatslice
 	signatset   = make(map[*types.Type]struct{})
+	signatslice []*types.Type
 
 	itabs []itabEntry
 	ptabs []ptabEntry
@@ -655,7 +656,7 @@ func typePkg(t *types.Type) *types.Pkg {
 	tsym := t.Sym
 	if tsym == nil {
 		switch t.Etype {
-		case TARRAY, TSLICE, TPTR32, TPTR64, TCHAN:
+		case TARRAY, TSLICE, TPTR, TCHAN:
 			if t.Elem() != nil {
 				tsym = t.Elem().Sym
 			}
@@ -713,8 +714,7 @@ var kinds = []int{
 	TFLOAT64:    objabi.KindFloat64,
 	TBOOL:       objabi.KindBool,
 	TSTRING:     objabi.KindString,
-	TPTR32:      objabi.KindPtr,
-	TPTR64:      objabi.KindPtr,
+	TPTR:        objabi.KindPtr,
 	TSTRUCT:     objabi.KindStruct,
 	TINTER:      objabi.KindInterface,
 	TCHAN:       objabi.KindChan,
@@ -735,8 +735,7 @@ func typeptrdata(t *types.Type) int64 {
 	}
 
 	switch t.Etype {
-	case TPTR32,
-		TPTR64,
+	case TPTR,
 		TUNSAFEPTR,
 		TFUNC,
 		TCHAN,
@@ -958,6 +957,12 @@ func typesymprefix(prefix string, t *types.Type) *types.Sym {
 	p := prefix + "." + t.ShortString()
 	s := typeLookup(p)
 
+	// This function is for looking up type-related generated functions
+	// (e.g. eq and hash). Make sure they are indeed generated.
+	signatmu.Lock()
+	addsignat(t)
+	signatmu.Unlock()
+
 	//print("algsym: %s -> %+S\n", p, s);
 
 	return s
@@ -968,9 +973,9 @@ func typenamesym(t *types.Type) *types.Sym {
 		Fatalf("typenamesym %v", t)
 	}
 	s := typesym(t)
-	signatsetmu.Lock()
+	signatmu.Lock()
 	addsignat(t)
-	signatsetmu.Unlock()
+	signatmu.Unlock()
 	return s
 }
 
@@ -1028,8 +1033,7 @@ func isreflexive(t *types.Type) bool {
 		TINT64,
 		TUINT64,
 		TUINTPTR,
-		TPTR32,
-		TPTR64,
+		TPTR,
 		TUNSAFEPTR,
 		TSTRING,
 		TCHAN:
@@ -1064,7 +1068,7 @@ func isreflexive(t *types.Type) bool {
 func needkeyupdate(t *types.Type) bool {
 	switch t.Etype {
 	case TBOOL, TINT, TUINT, TINT8, TUINT8, TINT16, TUINT16, TINT32, TUINT32,
-		TINT64, TUINT64, TUINTPTR, TPTR32, TPTR64, TUNSAFEPTR, TCHAN:
+		TINT64, TUINT64, TUINTPTR, TPTR, TUNSAFEPTR, TCHAN:
 		return false
 
 	case TFLOAT32, TFLOAT64, TCOMPLEX64, TCOMPLEX128, // floats and complex can be +0/-0
@@ -1247,12 +1251,10 @@ func dtypesym(t *types.Type) *obj.LSym {
 		s1 := dtypesym(t.Key())
 		s2 := dtypesym(t.Elem())
 		s3 := dtypesym(bmap(t))
-		s4 := dtypesym(hmap(t))
 		ot = dcommontype(lsym, t)
 		ot = dsymptr(lsym, ot, s1, 0)
 		ot = dsymptr(lsym, ot, s2, 0)
 		ot = dsymptr(lsym, ot, s3, 0)
-		ot = dsymptr(lsym, ot, s4, 0)
 		if t.Key().Width > MAXKEYSIZE {
 			ot = duint8(lsym, ot, uint8(Widthptr))
 			ot = duint8(lsym, ot, 1) // indirect
@@ -1274,7 +1276,7 @@ func dtypesym(t *types.Type) *obj.LSym {
 		ot = duint8(lsym, ot, uint8(obj.Bool2int(needkeyupdate(t.Key()))))
 		ot = dextratype(lsym, ot, t, 0)
 
-	case TPTR32, TPTR64:
+	case TPTR:
 		if t.Elem().Etype == TANY {
 			// ../../../../runtime/type.go:/UnsafePointerType
 			ot = dcommontype(lsym, t)
@@ -1351,7 +1353,7 @@ func dtypesym(t *types.Type) *obj.LSym {
 		// functions must return the existing type structure rather
 		// than creating a new one.
 		switch t.Etype {
-		case TPTR32, TPTR64, TARRAY, TCHAN, TFUNC, TMAP, TSLICE, TSTRUCT:
+		case TPTR, TARRAY, TCHAN, TFUNC, TMAP, TSLICE, TSTRUCT:
 			keep = true
 		}
 	}
@@ -1443,7 +1445,10 @@ func itabsym(it *obj.LSym, offset int64) *obj.LSym {
 
 // addsignat ensures that a runtime type descriptor is emitted for t.
 func addsignat(t *types.Type) {
-	signatset[t] = struct{}{}
+	if _, ok := signatset[t]; !ok {
+		signatset[t] = struct{}{}
+		signatslice = append(signatslice, t)
+	}
 }
 
 func addsignats(dcls []*Node) {
@@ -1458,14 +1463,15 @@ func addsignats(dcls []*Node) {
 func dumpsignats() {
 	// Process signatset. Use a loop, as dtypesym adds
 	// entries to signatset while it is being processed.
-	signats := make([]typeAndStr, len(signatset))
-	for len(signatset) > 0 {
+	signats := make([]typeAndStr, len(signatslice))
+	for len(signatslice) > 0 {
 		signats = signats[:0]
 		// Transfer entries to a slice and sort, for reproducible builds.
-		for t := range signatset {
+		for _, t := range signatslice {
 			signats = append(signats, typeAndStr{t: t, short: typesymname(t), regular: t.String()})
 			delete(signatset, t)
 		}
+		signatslice = signatslice[:0]
 		sort.Sort(typesByString(signats))
 		for _, ts := range signats {
 			t := ts.t

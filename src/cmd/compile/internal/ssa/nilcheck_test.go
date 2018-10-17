@@ -87,7 +87,7 @@ func TestNilcheckSimple(t *testing.T) {
 	nilcheckelim(fun.f)
 
 	// clean up the removed nil check
-	fuse(fun.f)
+	fusePlain(fun.f)
 	deadcode(fun.f)
 
 	CheckFunc(fun.f)
@@ -124,7 +124,7 @@ func TestNilcheckDomOrder(t *testing.T) {
 	nilcheckelim(fun.f)
 
 	// clean up the removed nil check
-	fuse(fun.f)
+	fusePlain(fun.f)
 	deadcode(fun.f)
 
 	CheckFunc(fun.f)
@@ -157,7 +157,7 @@ func TestNilcheckAddr(t *testing.T) {
 	nilcheckelim(fun.f)
 
 	// clean up the removed nil check
-	fuse(fun.f)
+	fusePlain(fun.f)
 	deadcode(fun.f)
 
 	CheckFunc(fun.f)
@@ -191,7 +191,7 @@ func TestNilcheckAddPtr(t *testing.T) {
 	nilcheckelim(fun.f)
 
 	// clean up the removed nil check
-	fuse(fun.f)
+	fusePlain(fun.f)
 	deadcode(fun.f)
 
 	CheckFunc(fun.f)
@@ -212,7 +212,7 @@ func TestNilcheckPhi(t *testing.T) {
 			Valu("mem", OpInitMem, types.TypeMem, 0, nil),
 			Valu("sb", OpSB, c.config.Types.Uintptr, 0, nil),
 			Valu("sp", OpSP, c.config.Types.Uintptr, 0, nil),
-			Valu("baddr", OpAddr, c.config.Types.Bool, 0, "b", "sp"),
+			Valu("baddr", OpLocalAddr, c.config.Types.Bool, 0, "b", "sp", "mem"),
 			Valu("bool1", OpLoad, c.config.Types.Bool, 0, nil, "baddr", "mem"),
 			If("bool1", "b1", "b2")),
 		Bloc("b1",
@@ -235,7 +235,7 @@ func TestNilcheckPhi(t *testing.T) {
 	nilcheckelim(fun.f)
 
 	// clean up the removed nil check
-	fuse(fun.f)
+	fusePlain(fun.f)
 	deadcode(fun.f)
 
 	CheckFunc(fun.f)
@@ -276,7 +276,7 @@ func TestNilcheckKeepRemove(t *testing.T) {
 	nilcheckelim(fun.f)
 
 	// clean up the removed nil check
-	fuse(fun.f)
+	fusePlain(fun.f)
 	deadcode(fun.f)
 
 	CheckFunc(fun.f)
@@ -323,7 +323,7 @@ func TestNilcheckInFalseBranch(t *testing.T) {
 	nilcheckelim(fun.f)
 
 	// clean up the removed nil check
-	fuse(fun.f)
+	fusePlain(fun.f)
 	deadcode(fun.f)
 
 	CheckFunc(fun.f)
@@ -374,7 +374,7 @@ func TestNilcheckUser(t *testing.T) {
 	nilcheckelim(fun.f)
 
 	// clean up the removed nil check
-	fuse(fun.f)
+	fusePlain(fun.f)
 	deadcode(fun.f)
 
 	CheckFunc(fun.f)
@@ -418,7 +418,7 @@ func TestNilcheckBug(t *testing.T) {
 	nilcheckelim(fun.f)
 
 	// clean up the removed nil check
-	fuse(fun.f)
+	fusePlain(fun.f)
 	deadcode(fun.f)
 
 	CheckFunc(fun.f)

@@ -64,8 +64,8 @@ const (
 	// StackSystem is a number of additional bytes to add
 	// to each stack below the usual guard area for OS-specific
 	// purposes like signal handling. Used on Windows, Plan 9,
-	// and Darwin/ARM because they do not use a separate stack.
-	_StackSystem = sys.GoosWindows*512*sys.PtrSize + sys.GoosPlan9*512 + sys.GoosDarwin*sys.GoarchArm*1024
+	// and iOS because they do not use a separate stack.
+	_StackSystem = sys.GoosWindows*512*sys.PtrSize + sys.GoosPlan9*512 + sys.GoosDarwin*sys.GoarchArm*1024 + sys.GoosDarwin*sys.GoarchArm64*1024
 
 	// The minimum size of stack used by Go code
 	_StackMin = 2048
@@ -186,6 +186,7 @@ func stackpoolalloc(order uint8) gclinkptr {
 		if s.manualFreeList.ptr() != nil {
 			throw("bad manualFreeList")
 		}
+		osStackAlloc(s)
 		s.elemsize = _FixedStack << order
 		for i := uintptr(0); i < _StackCacheSize; i += s.elemsize {
 			x := gclinkptr(s.base() + i)
@@ -210,7 +211,7 @@ func stackpoolalloc(order uint8) gclinkptr {
 // Adds stack x to the free pool. Must be called with stackpoolmu held.
 func stackpoolfree(x gclinkptr, order uint8) {
 	s := spanOfUnchecked(uintptr(x))
-	if s.state != _MSpanManual {
+	if s.state != mSpanManual {
 		throw("freeing stack not in a stack span")
 	}
 	if s.manualFreeList.ptr() == nil {
@@ -238,6 +239,7 @@ func stackpoolfree(x gclinkptr, order uint8) {
 		// By not freeing, we prevent step #4 until GC is done.
 		stackpool[order].remove(s)
 		s.manualFreeList = 0
+		osStackFree(s)
 		mheap_.freeManual(s, &memstats.stacks_inuse)
 	}
 }
@@ -348,7 +350,7 @@ func stackalloc(n uint32) stack {
 		}
 		var x gclinkptr
 		c := thisg.m.mcache
-		if stackNoCache != 0 || c == nil || thisg.m.preemptoff != "" || thisg.m.helpgc != 0 {
+		if stackNoCache != 0 || c == nil || thisg.m.preemptoff != "" {
 			// c == nil can happen in the guts of exitsyscall or
 			// procresize. Just get a stack from the global pool.
 			// Also don't touch stackcache during gc
@@ -385,6 +387,7 @@ func stackalloc(n uint32) stack {
 			if s == nil {
 				throw("out of memory")
 			}
+			osStackAlloc(s)
 			s.elemsize = uintptr(n)
 		}
 		v = unsafe.Pointer(s.base())
@@ -442,7 +445,7 @@ func stackfree(stk stack) {
 		}
 		x := gclinkptr(v)
 		c := gp.m.mcache
-		if stackNoCache != 0 || c == nil || gp.m.preemptoff != "" || gp.m.helpgc != 0 {
+		if stackNoCache != 0 || c == nil || gp.m.preemptoff != "" {
 			lock(&stackpoolmu)
 			stackpoolfree(x, order)
 			unlock(&stackpoolmu)
@@ -456,13 +459,14 @@ func stackfree(stk stack) {
 		}
 	} else {
 		s := spanOfUnchecked(uintptr(v))
-		if s.state != _MSpanManual {
+		if s.state != mSpanManual {
 			println(hex(s.base()), v)
 			throw("bad span state")
 		}
 		if gcphase == _GCoff {
 			// Free the stack immediately if we're
 			// sweeping.
+			osStackFree(s)
 			mheap_.freeManual(s, &memstats.stacks_inuse)
 		} else {
 			// If the GC is running, we can't return a
@@ -606,8 +610,7 @@ func adjustpointers(scanp unsafe.Pointer, bv *bitvector, adjinfo *adjustinfo, f 
 // Note: the argument/return area is adjusted by the callee.
 func adjustframe(frame *stkframe, arg unsafe.Pointer) bool {
 	adjinfo := (*adjustinfo)(arg)
-	targetpc := frame.continpc
-	if targetpc == 0 {
+	if frame.continpc == 0 {
 		// Frame is dead.
 		return true
 	}
@@ -621,47 +624,13 @@ func adjustframe(frame *stkframe, arg unsafe.Pointer) bool {
 		// have full GC info for it (because it is written in asm).
 		return true
 	}
-	pcdata := int32(-1) // Use the entry map at function entry
-	if targetpc != f.entry {
-		targetpc--
-		pcdata = pcdatavalue(f, _PCDATA_StackMapIndex, targetpc, &adjinfo.cache)
-	}
-	if pcdata == -1 {
-		pcdata = 0 // in prologue
-	}
+
+	locals, args, objs := getStackMap(frame, &adjinfo.cache, true)
 
 	// Adjust local variables if stack frame has been allocated.
-	size := frame.varp - frame.sp
-	var minsize uintptr
-	switch sys.ArchFamily {
-	case sys.ARM64:
-		minsize = sys.SpAlign
-	default:
-		minsize = sys.MinFrameSize
-	}
-	if size > minsize {
-		stackmap := (*stackmap)(funcdata(f, _FUNCDATA_LocalsPointerMaps))
-		if stackmap == nil || stackmap.n <= 0 {
-			print("runtime: frame ", funcname(f), " untyped locals ", hex(frame.varp-size), "+", hex(size), "\n")
-			throw("missing stackmap")
-		}
-		// If nbit == 0, there's no work to do.
-		if stackmap.nbit > 0 {
-			// Locals bitmap information, scan just the pointers in locals.
-			if pcdata < 0 || pcdata >= stackmap.n {
-				// don't know where we are
-				print("runtime: pcdata is ", pcdata, " and ", stackmap.n, " locals stack map entries for ", funcname(f), " (targetpc=", targetpc, ")\n")
-				throw("bad symbol table")
-			}
-			bv := stackmapdata(stackmap, pcdata)
-			size = uintptr(bv.n) * sys.PtrSize
-			if stackDebug >= 3 {
-				print("      locals ", pcdata, "/", stackmap.n, " ", size/sys.PtrSize, " words ", bv.bytedata, "\n")
-			}
-			adjustpointers(unsafe.Pointer(frame.varp-size), &bv, adjinfo, f)
-		} else if stackDebug >= 3 {
-			print("      no locals to adjust\n")
-		}
+	if locals.n > 0 {
+		size := uintptr(locals.n) * sys.PtrSize
+		adjustpointers(unsafe.Pointer(frame.varp-size), &locals, adjinfo, f)
 	}
 
 	// Adjust saved base pointer if there is one.
@@ -688,30 +657,48 @@ func adjustframe(frame *stkframe, arg unsafe.Pointer) bool {
 	}
 
 	// Adjust arguments.
-	if frame.arglen > 0 {
-		var bv bitvector
-		if frame.argmap != nil {
-			bv = *frame.argmap
-		} else {
-			stackmap := (*stackmap)(funcdata(f, _FUNCDATA_ArgsPointerMaps))
-			if stackmap == nil || stackmap.n <= 0 {
-				print("runtime: frame ", funcname(f), " untyped args ", frame.argp, "+", frame.arglen, "\n")
-				throw("missing stackmap")
-			}
-			if pcdata < 0 || pcdata >= stackmap.n {
-				// don't know where we are
-				print("runtime: pcdata is ", pcdata, " and ", stackmap.n, " args stack map entries for ", funcname(f), " (targetpc=", targetpc, ")\n")
-				throw("bad symbol table")
-			}
-			bv = stackmapdata(stackmap, pcdata)
-		}
+	if args.n > 0 {
 		if stackDebug >= 3 {
 			print("      args\n")
 		}
-		if bv.n > 0 {
-			adjustpointers(unsafe.Pointer(frame.argp), &bv, adjinfo, funcInfo{})
+		adjustpointers(unsafe.Pointer(frame.argp), &args, adjinfo, funcInfo{})
+	}
+
+	// Adjust pointers in all stack objects (whether they are live or not).
+	// See comments in mgcmark.go:scanframeworker.
+	if frame.varp != 0 {
+		for _, obj := range objs {
+			off := obj.off
+			base := frame.varp // locals base pointer
+			if off >= 0 {
+				base = frame.argp // arguments and return values base pointer
+			}
+			p := base + uintptr(off)
+			if p < frame.sp {
+				// Object hasn't been allocated in the frame yet.
+				// (Happens when the stack bounds check fails and
+				// we call into morestack.)
+				continue
+			}
+			t := obj.typ
+			gcdata := t.gcdata
+			var s *mspan
+			if t.kind&kindGCProg != 0 {
+				// See comments in mgcmark.go:scanstack
+				s = materializeGCProg(t.ptrdata, gcdata)
+				gcdata = (*byte)(unsafe.Pointer(s.startAddr))
+			}
+			for i := uintptr(0); i < t.ptrdata; i += sys.PtrSize {
+				if *addb(gcdata, i/(8*sys.PtrSize))>>(i/sys.PtrSize&7)&1 != 0 {
+					adjustpointer(adjinfo, unsafe.Pointer(p+i))
+				}
+			}
+			if s != nil {
+				dematerializeGCProg(s)
+			}
 		}
 	}
+
 	return true
 }
 
@@ -993,7 +980,7 @@ func newstack() {
 		throw("missing stack in newstack")
 	}
 	sp := gp.sched.sp
-	if sys.ArchFamily == sys.AMD64 || sys.ArchFamily == sys.I386 {
+	if sys.ArchFamily == sys.AMD64 || sys.ArchFamily == sys.I386 || sys.ArchFamily == sys.WASM {
 		// The call to morestack cost a word.
 		sp -= sys.PtrSize
 	}
@@ -1030,9 +1017,6 @@ func newstack() {
 				// system stack.
 				gcw := &gp.m.p.ptr().gcw
 				scanstack(gp, gcw)
-				if gcBlackenPromptly {
-					gcw.dispose()
-				}
 				gp.gcscandone = true
 			}
 			gp.preemptscan = false
@@ -1165,6 +1149,7 @@ func freeStackSpans() {
 			if s.allocCount == 0 {
 				list.remove(s)
 				s.manualFreeList = 0
+				osStackFree(s)
 				mheap_.freeManual(s, &memstats.stacks_inuse)
 			}
 			s = next
@@ -1179,11 +1164,138 @@ func freeStackSpans() {
 		for s := stackLarge.free[i].first; s != nil; {
 			next := s.next
 			stackLarge.free[i].remove(s)
+			osStackFree(s)
 			mheap_.freeManual(s, &memstats.stacks_inuse)
 			s = next
 		}
 	}
 	unlock(&stackLarge.lock)
+}
+
+// getStackMap returns the locals and arguments live pointer maps, and
+// stack object list for frame.
+func getStackMap(frame *stkframe, cache *pcvalueCache, debug bool) (locals, args bitvector, objs []stackObjectRecord) {
+	targetpc := frame.continpc
+	if targetpc == 0 {
+		// Frame is dead. Return empty bitvectors.
+		return
+	}
+
+	f := frame.fn
+	pcdata := int32(-1)
+	if targetpc != f.entry {
+		// Back up to the CALL. If we're at the function entry
+		// point, we want to use the entry map (-1), even if
+		// the first instruction of the function changes the
+		// stack map.
+		targetpc--
+		pcdata = pcdatavalue(f, _PCDATA_StackMapIndex, targetpc, cache)
+	}
+	if pcdata == -1 {
+		// We do not have a valid pcdata value but there might be a
+		// stackmap for this function. It is likely that we are looking
+		// at the function prologue, assume so and hope for the best.
+		pcdata = 0
+	}
+
+	// Local variables.
+	size := frame.varp - frame.sp
+	var minsize uintptr
+	switch sys.ArchFamily {
+	case sys.ARM64:
+		minsize = sys.SpAlign
+	default:
+		minsize = sys.MinFrameSize
+	}
+	if size > minsize {
+		var stkmap *stackmap
+		stackid := pcdata
+		if f.funcID != funcID_debugCallV1 {
+			stkmap = (*stackmap)(funcdata(f, _FUNCDATA_LocalsPointerMaps))
+		} else {
+			// debugCallV1's stack map is the register map
+			// at its call site.
+			callerPC := frame.lr
+			caller := findfunc(callerPC)
+			if !caller.valid() {
+				println("runtime: debugCallV1 called by unknown caller", hex(callerPC))
+				throw("bad debugCallV1")
+			}
+			stackid = int32(-1)
+			if callerPC != caller.entry {
+				callerPC--
+				stackid = pcdatavalue(caller, _PCDATA_RegMapIndex, callerPC, cache)
+			}
+			if stackid == -1 {
+				stackid = 0 // in prologue
+			}
+			stkmap = (*stackmap)(funcdata(caller, _FUNCDATA_RegPointerMaps))
+		}
+		if stkmap == nil || stkmap.n <= 0 {
+			print("runtime: frame ", funcname(f), " untyped locals ", hex(frame.varp-size), "+", hex(size), "\n")
+			throw("missing stackmap")
+		}
+		// If nbit == 0, there's no work to do.
+		if stkmap.nbit > 0 {
+			if stackid < 0 || stackid >= stkmap.n {
+				// don't know where we are
+				print("runtime: pcdata is ", stackid, " and ", stkmap.n, " locals stack map entries for ", funcname(f), " (targetpc=", hex(targetpc), ")\n")
+				throw("bad symbol table")
+			}
+			locals = stackmapdata(stkmap, stackid)
+			if stackDebug >= 3 && debug {
+				print("      locals ", stackid, "/", stkmap.n, " ", locals.n, " words ", locals.bytedata, "\n")
+			}
+		} else if stackDebug >= 3 && debug {
+			print("      no locals to adjust\n")
+		}
+	}
+
+	// Arguments.
+	if frame.arglen > 0 {
+		if frame.argmap != nil {
+			args = *frame.argmap
+		} else {
+			stackmap := (*stackmap)(funcdata(f, _FUNCDATA_ArgsPointerMaps))
+			if stackmap == nil || stackmap.n <= 0 {
+				print("runtime: frame ", funcname(f), " untyped args ", hex(frame.argp), "+", hex(frame.arglen), "\n")
+				throw("missing stackmap")
+			}
+			if pcdata < 0 || pcdata >= stackmap.n {
+				// don't know where we are
+				print("runtime: pcdata is ", pcdata, " and ", stackmap.n, " args stack map entries for ", funcname(f), " (targetpc=", hex(targetpc), ")\n")
+				throw("bad symbol table")
+			}
+			if stackmap.nbit > 0 {
+				args = stackmapdata(stackmap, pcdata)
+			}
+		}
+	}
+
+	// stack objects.
+	p := funcdata(f, _FUNCDATA_StackObjects)
+	if p != nil {
+		n := *(*uintptr)(p)
+		p = add(p, sys.PtrSize)
+		*(*slice)(unsafe.Pointer(&objs)) = slice{array: noescape(p), len: int(n), cap: int(n)}
+		// Note: the noescape above is needed to keep
+		// getStackMap from "leaking param content:
+		// frame".  That leak propagates up to getgcmask, then
+		// GCMask, then verifyGCInfo, which converts the stack
+		// gcinfo tests into heap gcinfo tests :(
+	}
+
+	return
+}
+
+// A stackObjectRecord is generated by the compiler for each stack object in a stack frame.
+// This record must match the generator code in cmd/compile/internal/gc/ssa.go:emitStackObjects.
+type stackObjectRecord struct {
+	// offset in frame
+	// if negative, offset from varp
+	// if non-negative, offset from argp
+	off int
+	typ *_type
 }
 
 //go:nosplit

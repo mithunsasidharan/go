@@ -300,7 +300,7 @@ func (p *parser) consumeCommentGroup(n int) (comments *ast.CommentGroup, endline
 
 // Advance to the next non-comment token. In the process, collect
 // any comment groups encountered, and remember the last lead and
-// and line comments.
+// line comments.
 //
 // A lead comment is a comment group that starts and ends in a
 // line without any other tokens and that is followed by a non-comment
@@ -1830,6 +1830,7 @@ func (p *parser) makeExpr(s ast.Stmt, want string) ast.Expr {
 func (p *parser) parseIfHeader() (init ast.Stmt, cond ast.Expr) {
 	if p.tok == token.LBRACE {
 		p.error(p.pos, "missing condition in if statement")
+		cond = &ast.BadExpr{From: p.pos, To: p.pos}
 		return
 	}
 	// p.tok != token.LBRACE
@@ -1875,6 +1876,11 @@ func (p *parser) parseIfHeader() (init ast.Stmt, cond ast.Expr) {
 		} else {
 			p.error(semi.pos, "missing condition in if statement")
 		}
+	}
+
+	// make sure we have a valid AST
+	if cond == nil {
+		cond = &ast.BadExpr{From: p.pos, To: p.pos}
 	}
 
 	p.exprLev = outer

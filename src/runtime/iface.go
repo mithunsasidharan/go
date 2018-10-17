@@ -18,7 +18,7 @@ var (
 	itabTableInit = itabTableType{size: itabInitSize} // starter table
 )
 
-//Note: change the formula in the mallocgc call in itabAdd if you change these fields.
+// Note: change the formula in the mallocgc call in itabAdd if you change these fields.
 type itabTableType struct {
 	size    uintptr             // length of entries array. Always a power of 2.
 	count   uintptr             // current number of filled entries.
@@ -41,7 +41,7 @@ func getitab(inter *interfacetype, typ *_type, canfail bool) *itab {
 			return nil
 		}
 		name := inter.typ.nameOff(inter.mhdr[0].name)
-		panic(&TypeAssertionError{"", typ.string(), inter.typ.string(), name.name()})
+		panic(&TypeAssertionError{nil, typ, &inter.typ, name.name()})
 	}
 
 	var m *itab
@@ -82,7 +82,7 @@ finish:
 	// The cached result doesn't record which
 	// interface function was missing, so initialize
 	// the itab again to get the missing function name.
-	panic(&TypeAssertionError{concreteString: typ.string(), assertedString: inter.typ.string(), missingMethod: m.init()})
+	panic(&TypeAssertionError{concrete: typ, asserted: &inter.typ, missingMethod: m.init()})
 }
 
 // find finds the given interface/type pair in t.
@@ -245,11 +245,7 @@ func itabsinit() {
 // want = the static type we're trying to convert to.
 // iface = the static type we're converting from.
 func panicdottypeE(have, want, iface *_type) {
-	haveString := ""
-	if have != nil {
-		haveString = have.string()
-	}
-	panic(&TypeAssertionError{iface.string(), haveString, want.string(), ""})
+	panic(&TypeAssertionError{iface, have, want, ""})
 }
 
 // panicdottypeI is called when doing an i.(T) conversion and the conversion fails.
@@ -265,7 +261,7 @@ func panicdottypeI(have *itab, want, iface *_type) {
 // panicnildottype is called when doing a i.(T) conversion and the interface i is nil.
 // want = the static type we're trying to convert to.
 func panicnildottype(want *_type) {
-	panic(&TypeAssertionError{"", "", want.string(), ""})
+	panic(&TypeAssertionError{nil, nil, want, ""})
 	// TODO: Add the static type we're converting from as well.
 	// It might generate a better error message.
 	// Just to match other nil conversion errors, we don't for now.
@@ -333,38 +329,27 @@ func convT2E64(t *_type, val uint64) (e eface) {
 	return
 }
 
-func convT2Estring(t *_type, elem unsafe.Pointer) (e eface) {
-	if raceenabled {
-		raceReadObjectPC(t, elem, getcallerpc(), funcPC(convT2Estring))
-	}
-	if msanenabled {
-		msanread(elem, t.size)
-	}
+func convT2Estring(t *_type, val string) (e eface) {
 	var x unsafe.Pointer
-	if *(*string)(elem) == "" {
+	if val == "" {
 		x = unsafe.Pointer(&zeroVal[0])
 	} else {
-		x = mallocgc(t.size, t, true)
-		*(*string)(x) = *(*string)(elem)
+		x = mallocgc(unsafe.Sizeof(val), t, true)
+		*(*string)(x) = val
 	}
 	e._type = t
 	e.data = x
 	return
 }
 
-func convT2Eslice(t *_type, elem unsafe.Pointer) (e eface) {
-	if raceenabled {
-		raceReadObjectPC(t, elem, getcallerpc(), funcPC(convT2Eslice))
-	}
-	if msanenabled {
-		msanread(elem, t.size)
-	}
+func convT2Eslice(t *_type, val []byte) (e eface) {
+	// Note: this must work for any element type, not just byte.
 	var x unsafe.Pointer
-	if v := *(*slice)(elem); uintptr(v.array) == 0 {
+	if (*slice)(unsafe.Pointer(&val)).array == nil {
 		x = unsafe.Pointer(&zeroVal[0])
 	} else {
-		x = mallocgc(t.size, t, true)
-		*(*slice)(x) = *(*slice)(elem)
+		x = mallocgc(unsafe.Sizeof(val), t, true)
+		*(*[]byte)(x) = val
 	}
 	e._type = t
 	e.data = x
@@ -442,40 +427,29 @@ func convT2I64(tab *itab, val uint64) (i iface) {
 	return
 }
 
-func convT2Istring(tab *itab, elem unsafe.Pointer) (i iface) {
+func convT2Istring(tab *itab, val string) (i iface) {
 	t := tab._type
-	if raceenabled {
-		raceReadObjectPC(t, elem, getcallerpc(), funcPC(convT2Istring))
-	}
-	if msanenabled {
-		msanread(elem, t.size)
-	}
 	var x unsafe.Pointer
-	if *(*string)(elem) == "" {
+	if val == "" {
 		x = unsafe.Pointer(&zeroVal[0])
 	} else {
-		x = mallocgc(t.size, t, true)
-		*(*string)(x) = *(*string)(elem)
+		x = mallocgc(unsafe.Sizeof(val), t, true)
+		*(*string)(x) = val
 	}
 	i.tab = tab
 	i.data = x
 	return
 }
 
-func convT2Islice(tab *itab, elem unsafe.Pointer) (i iface) {
+func convT2Islice(tab *itab, val []byte) (i iface) {
+	// Note: this must work for any element type, not just byte.
 	t := tab._type
-	if raceenabled {
-		raceReadObjectPC(t, elem, getcallerpc(), funcPC(convT2Islice))
-	}
-	if msanenabled {
-		msanread(elem, t.size)
-	}
 	var x unsafe.Pointer
-	if v := *(*slice)(elem); uintptr(v.array) == 0 {
+	if (*slice)(unsafe.Pointer(&val)).array == nil {
 		x = unsafe.Pointer(&zeroVal[0])
 	} else {
-		x = mallocgc(t.size, t, true)
-		*(*slice)(x) = *(*slice)(elem)
+		x = mallocgc(unsafe.Sizeof(val), t, true)
+		*(*[]byte)(x) = val
 	}
 	i.tab = tab
 	i.data = x
@@ -516,7 +490,7 @@ func assertI2I(inter *interfacetype, i iface) (r iface) {
 	tab := i.tab
 	if tab == nil {
 		// explicit conversions require non-nil interface value.
-		panic(&TypeAssertionError{"", "", inter.typ.string(), ""})
+		panic(&TypeAssertionError{nil, nil, &inter.typ, ""})
 	}
 	if tab.inter == inter {
 		r.tab = tab
@@ -549,7 +523,7 @@ func assertE2I(inter *interfacetype, e eface) (r iface) {
 	t := e._type
 	if t == nil {
 		// explicit conversions require non-nil interface value.
-		panic(&TypeAssertionError{"", "", inter.typ.string(), ""})
+		panic(&TypeAssertionError{nil, nil, &inter.typ, ""})
 	}
 	r.tab = getitab(inter, t, false)
 	r.data = e.data

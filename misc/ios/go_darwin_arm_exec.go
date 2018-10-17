@@ -31,6 +31,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -86,14 +87,18 @@ func main() {
 		bundleID = parts[1]
 	}
 
-	os.Exit(runMain())
+	exitCode, err := runMain()
+	if err != nil {
+		log.Fatalf("%v\n", err)
+	}
+	os.Exit(exitCode)
 }
 
-func runMain() int {
+func runMain() (int, error) {
 	var err error
 	tmpdir, err = ioutil.TempDir("", "go_darwin_arm_exec_")
 	if err != nil {
-		log.Fatal(err)
+		return 1, err
 	}
 	if !debug {
 		defer os.RemoveAll(tmpdir)
@@ -103,7 +108,7 @@ func runMain() int {
 	os.RemoveAll(appdir)
 
 	if err := assembleApp(appdir, os.Args[1]); err != nil {
-		log.Fatal(err)
+		return 1, err
 	}
 
 	// This wrapper uses complicated machinery to run iOS binaries. It
@@ -115,42 +120,43 @@ func runMain() int {
 	lockName := filepath.Join(os.TempDir(), "go_darwin_arm_exec-"+deviceID+".lock")
 	lock, err = os.OpenFile(lockName, os.O_CREATE|os.O_RDONLY, 0666)
 	if err != nil {
-		log.Fatal(err)
+		return 1, err
 	}
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		log.Fatal(err)
+		return 1, err
+	}
+
+	if err := uninstall(bundleID); err != nil {
+		return 1, err
 	}
 
 	if err := install(appdir); err != nil {
-		log.Fatal(err)
-	}
-
-	deviceApp, err := findDeviceAppPath(bundleID)
-	if err != nil {
-		log.Fatal(err)
+		return 1, err
 	}
 
 	if err := mountDevImage(); err != nil {
-		log.Fatal(err)
+		return 1, err
 	}
+
+	// Kill any hanging debug bridges that might take up port 3222.
+	exec.Command("killall", "idevicedebugserverproxy").Run()
 
 	closer, err := startDebugBridge()
 	if err != nil {
-		log.Fatal(err)
+		return 1, err
 	}
 	defer closer()
 
-	if err := run(appdir, deviceApp, os.Args[2:]); err != nil {
+	if err := run(appdir, bundleID, os.Args[2:]); err != nil {
 		// If the lldb driver completed with an exit code, use that.
 		if err, ok := err.(*exec.ExitError); ok {
 			if ws, ok := err.Sys().(interface{ ExitStatus() int }); ok {
-				return ws.ExitStatus()
+				return ws.ExitStatus(), nil
 			}
 		}
-		fmt.Fprintf(os.Stderr, "go_darwin_arm_exec: %v\n", err)
-		return 1
+		return 1, err
 	}
-	return 0
+	return 0, nil
 }
 
 func getenv(envvar string) string {
@@ -209,14 +215,29 @@ func assembleApp(appdir, bin string) error {
 // to connect to.
 func mountDevImage() error {
 	// Check for existing mount.
-	cmd := idevCmd(exec.Command("ideviceimagemounter", "-l"))
+	cmd := idevCmd(exec.Command("ideviceimagemounter", "-l", "-x"))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		os.Stderr.Write(out)
 		return fmt.Errorf("ideviceimagemounter: %v", err)
 	}
-	if len(out) > 0 {
-		// Assume there is an image mounted
+	var info struct {
+		Dict struct {
+			Data []byte `xml:",innerxml"`
+		} `xml:"dict"`
+	}
+	if err := xml.Unmarshal(out, &info); err != nil {
+		return fmt.Errorf("mountDevImage: failed to decode mount information: %v", err)
+	}
+	dict, err := parsePlistDict(info.Dict.Data)
+	if err != nil {
+		return fmt.Errorf("mountDevImage: failed to parse mount information: %v", err)
+	}
+	if dict["ImagePresent"] == "true" && dict["Status"] == "Complete" {
+		return nil
+	}
+	// Some devices only give us an ImageSignature key.
+	if _, exists := dict["ImageSignature"]; exists {
 		return nil
 	}
 	// No image is mounted. Find a suitable image.
@@ -258,6 +279,12 @@ func findDevImage() (string, error) {
 	}
 	if iosVer == "" || buildVer == "" {
 		return "", errors.New("failed to parse ideviceinfo output")
+	}
+	verSplit := strings.Split(iosVer, ".")
+	if len(verSplit) > 2 {
+		// Developer images are specific to major.minor ios version.
+		// Cut off the patch version.
+		iosVer = strings.Join(verSplit[:2], ".")
 	}
 	sdkBase := "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/DeviceSupport"
 	patterns := []string{fmt.Sprintf("%s (%s)", iosVer, buildVer), fmt.Sprintf("%s (*)", iosVer), fmt.Sprintf("%s*", iosVer)}
@@ -332,40 +359,12 @@ func findDeviceAppPath(bundleID string) (string, error) {
 		} `xml:"array>dict"`
 	}
 	if err := xml.Unmarshal(out, &list); err != nil {
-		return "", fmt.Errorf("failed to parse ideviceinstaller outout: %v", err)
+		return "", fmt.Errorf("failed to parse ideviceinstaller output: %v", err)
 	}
 	for _, app := range list.Apps {
-		d := xml.NewDecoder(bytes.NewReader(app.Data))
-		values := make(map[string]string)
-		var key string
-		var hasKey bool
-		for {
-			tok, err := d.Token()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				return "", fmt.Errorf("failed to device app data: %v", err)
-			}
-			if tok, ok := tok.(xml.StartElement); ok {
-				if tok.Name.Local == "key" {
-					if err := d.DecodeElement(&key, &tok); err != nil {
-						return "", fmt.Errorf("failed to device app data: %v", err)
-					}
-					hasKey = true
-				} else if hasKey {
-					var val string
-					if err := d.DecodeElement(&val, &tok); err != nil {
-						return "", fmt.Errorf("failed to device app data: %v", err)
-					}
-					values[key] = val
-					hasKey = false
-				} else {
-					if err := d.Skip(); err != nil {
-						return "", fmt.Errorf("failed to device app data: %v", err)
-					}
-				}
-			}
+		values, err := parsePlistDict(app.Data)
+		if err != nil {
+			return "", fmt.Errorf("findDeviceAppPath: failed to parse app dict: %v", err)
 		}
 		if values["CFBundleIdentifier"] == bundleID {
 			if path, ok := values["Path"]; ok {
@@ -376,37 +375,157 @@ func findDeviceAppPath(bundleID string) (string, error) {
 	return "", fmt.Errorf("failed to find device path for bundle: %s", bundleID)
 }
 
-func install(appdir string) error {
+// Parse an xml encoded plist. Plist values are mapped to string.
+func parsePlistDict(dict []byte) (map[string]string, error) {
+	d := xml.NewDecoder(bytes.NewReader(dict))
+	values := make(map[string]string)
+	var key string
+	var hasKey bool
+	for {
+		tok, err := d.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if tok, ok := tok.(xml.StartElement); ok {
+			if tok.Name.Local == "key" {
+				if err := d.DecodeElement(&key, &tok); err != nil {
+					return nil, err
+				}
+				hasKey = true
+			} else if hasKey {
+				var val string
+				var err error
+				switch n := tok.Name.Local; n {
+				case "true", "false":
+					// Bools are represented as <true/> and <false/>.
+					val = n
+					err = d.Skip()
+				default:
+					err = d.DecodeElement(&val, &tok)
+				}
+				if err != nil {
+					return nil, err
+				}
+				values[key] = val
+				hasKey = false
+			} else {
+				if err := d.Skip(); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	return values, nil
+}
+
+func uninstall(bundleID string) error {
 	cmd := idevCmd(exec.Command(
 		"ideviceinstaller",
-		"-i", appdir,
+		"-U", bundleID,
 	))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		os.Stderr.Write(out)
-		return fmt.Errorf("ideviceinstaller -i %q: %v", appdir, err)
+		return fmt.Errorf("ideviceinstaller -U %q: %s", bundleID, err)
 	}
 	return nil
 }
 
+func install(appdir string) error {
+	attempt := 0
+	for {
+		cmd := idevCmd(exec.Command(
+			"ideviceinstaller",
+			"-i", appdir,
+		))
+		if out, err := cmd.CombinedOutput(); err != nil {
+			// Sometimes, installing the app fails for some reason.
+			// Give the device a few seconds and try again.
+			if attempt < 5 {
+				time.Sleep(5 * time.Second)
+				attempt++
+				continue
+			}
+			os.Stderr.Write(out)
+			return fmt.Errorf("ideviceinstaller -i %q: %v (%d attempts)", appdir, err, attempt)
+		}
+		return nil
+	}
+}
+
 func idevCmd(cmd *exec.Cmd) *exec.Cmd {
 	if deviceID != "" {
-		cmd.Args = append(cmd.Args, "-u", deviceID)
+		// Inject -u device_id after the executable, but before the arguments.
+		args := []string{cmd.Args[0], "-u", deviceID}
+		cmd.Args = append(args, cmd.Args[1:]...)
 	}
 	return cmd
 }
 
-func run(appdir, deviceapp string, args []string) error {
-	lldb := exec.Command(
-		"python",
-		"-", // Read script from stdin.
-		appdir,
-		deviceapp,
-	)
-	lldb.Args = append(lldb.Args, args...)
-	lldb.Stdin = strings.NewReader(lldbDriver)
-	lldb.Stdout = os.Stdout
-	lldb.Stderr = os.Stderr
-	return lldb.Run()
+func run(appdir, bundleID string, args []string) error {
+	var env []string
+	for _, e := range os.Environ() {
+		// Don't override TMPDIR on the device.
+		if strings.HasPrefix(e, "TMPDIR=") {
+			continue
+		}
+		env = append(env, e)
+	}
+	attempt := 0
+	for {
+		// The device app path reported by the device might be stale, so retry
+		// the lookup of the device path along with the lldb launching below.
+		deviceapp, err := findDeviceAppPath(bundleID)
+		if err != nil {
+			// The device app path might not yet exist for a newly installed app.
+			if attempt == 5 {
+				return err
+			}
+			attempt++
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		lldb := exec.Command(
+			"python",
+			"-", // Read script from stdin.
+			appdir,
+			deviceapp,
+		)
+		lldb.Args = append(lldb.Args, args...)
+		lldb.Env = env
+		lldb.Stdin = strings.NewReader(lldbDriver)
+		lldb.Stdout = os.Stdout
+		var out bytes.Buffer
+		lldb.Stderr = io.MultiWriter(&out, os.Stderr)
+		err = lldb.Start()
+		if err == nil {
+			// Forward SIGQUIT to the lldb driver which in turn will forward
+			// to the running program.
+			sigs := make(chan os.Signal, 1)
+			signal.Notify(sigs, syscall.SIGQUIT)
+			proc := lldb.Process
+			go func() {
+				for sig := range sigs {
+					proc.Signal(sig)
+				}
+			}()
+			err = lldb.Wait()
+			signal.Stop(sigs)
+			close(sigs)
+		}
+		// If the program was not started it can be retried without papering over
+		// real test failures.
+		started := bytes.HasPrefix(out.Bytes(), []byte("lldb: running program"))
+		if started || err == nil || attempt == 5 {
+			return err
+		}
+		// Sometimes, the app was not yet ready to launch or the device path was
+		// stale. Retry.
+		attempt++
+		time.Sleep(5 * time.Second)
+	}
 }
 
 func copyLocalDir(dst, src string) error {
@@ -606,6 +725,7 @@ const resourceRules = `<?xml version="1.0" encoding="UTF-8"?>
 const lldbDriver = `
 import sys
 import os
+import signal
 
 exe, device_exe, args = sys.argv[1], sys.argv[2], sys.argv[3:]
 
@@ -643,30 +763,44 @@ for i in range(0, sigs.GetNumSignals()):
 	sigs.SetShouldNotify(sig, False)
 
 event = lldb.SBEvent()
+running = False
+prev_handler = None
 while True:
 	if not listener.WaitForEvent(1, event):
 		continue
 	if not lldb.SBProcess.EventIsProcessEvent(event):
 		continue
-	# Pass through stdout and stderr.
-	while True:
-		out = process.GetSTDOUT(8192)
-		if not out:
-			break
-		sys.stdout.write(out)
-	while True:
-		out = process.GetSTDERR(8192)
-		if not out:
-			break
-		sys.stderr.write(out)
+	if running:
+		# Pass through stdout and stderr.
+		while True:
+			out = process.GetSTDOUT(8192)
+			if not out:
+				break
+			sys.stdout.write(out)
+		while True:
+			out = process.GetSTDERR(8192)
+			if not out:
+				break
+			sys.stderr.write(out)
 	state = process.GetStateFromEvent(event)
-	if state == lldb.eStateCrashed or state == lldb.eStateDetached or state == lldb.eStateUnloaded or state == lldb.eStateExited:
+	if state in [lldb.eStateCrashed, lldb.eStateDetached, lldb.eStateUnloaded, lldb.eStateExited]:
+		if running:
+			signal.signal(signal.SIGQUIT, prev_handler)
 		break
 	elif state == lldb.eStateConnected:
 		process.RemoteLaunch(args, env, None, None, None, None, 0, False, err)
 		if not err.Success():
 			sys.stderr.write("lldb: failed to launch remote process: %s\n" % (err))
+			process.Kill()
+			debugger.Terminate()
 			sys.exit(1)
+		# Forward SIGQUIT to the program.
+		def signal_handler(signal, frame):
+			process.Signal(signal)
+		prev_handler = signal.signal(signal.SIGQUIT, signal_handler)
+		# Tell the Go driver that the program is running and should not be retried.
+		sys.stderr.write("lldb: running program\n")
+		running = True
 		# Process stops once at the beginning. Continue.
 		process.Continue()
 

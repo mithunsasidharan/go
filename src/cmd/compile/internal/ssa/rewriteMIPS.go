@@ -145,6 +145,8 @@ func rewriteValueMIPS(v *Value) bool {
 		return rewriteValueMIPS_OpGeq8_0(v)
 	case OpGeq8U:
 		return rewriteValueMIPS_OpGeq8U_0(v)
+	case OpGetCallerPC:
+		return rewriteValueMIPS_OpGetCallerPC_0(v)
 	case OpGetCallerSP:
 		return rewriteValueMIPS_OpGetCallerSP_0(v)
 	case OpGetClosurePtr:
@@ -211,6 +213,8 @@ func rewriteValueMIPS(v *Value) bool {
 		return rewriteValueMIPS_OpLess8U_0(v)
 	case OpLoad:
 		return rewriteValueMIPS_OpLoad_0(v)
+	case OpLocalAddr:
+		return rewriteValueMIPS_OpLocalAddr_0(v)
 	case OpLsh16x16:
 		return rewriteValueMIPS_OpLsh16x16_0(v)
 	case OpLsh16x32:
@@ -1760,6 +1764,15 @@ func rewriteValueMIPS_OpGeq8U_0(v *Value) bool {
 		return true
 	}
 }
+func rewriteValueMIPS_OpGetCallerPC_0(v *Value) bool {
+	// match: (GetCallerPC)
+	// cond:
+	// result: (LoweredGetCallerPC)
+	for {
+		v.reset(OpMIPSLoweredGetCallerPC)
+		return true
+	}
+}
 func rewriteValueMIPS_OpGetCallerSP_0(v *Value) bool {
 	// match: (GetCallerSP)
 	// cond:
@@ -2499,6 +2512,20 @@ func rewriteValueMIPS_OpLoad_0(v *Value) bool {
 		return true
 	}
 	return false
+}
+func rewriteValueMIPS_OpLocalAddr_0(v *Value) bool {
+	// match: (LocalAddr {sym} base _)
+	// cond:
+	// result: (MOVWaddr {sym} base)
+	for {
+		sym := v.Aux
+		_ = v.Args[1]
+		base := v.Args[0]
+		v.reset(OpMIPSMOVWaddr)
+		v.Aux = sym
+		v.AddArg(base)
+		return true
+	}
 }
 func rewriteValueMIPS_OpLsh16x16_0(v *Value) bool {
 	b := v.Block

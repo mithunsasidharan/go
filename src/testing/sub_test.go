@@ -17,7 +17,7 @@ import (
 
 func init() {
 	// Make benchmark tests run 10* faster.
-	*benchTime = 100 * time.Millisecond
+	benchTime.d = 100 * time.Millisecond
 }
 
 func TestTestContext(t *T) {
@@ -168,7 +168,7 @@ func TestTRun(t *T) {
 --- FAIL: failure in parallel test propagates upwards (N.NNs)
     --- FAIL: failure in parallel test propagates upwards/#00 (N.NNs)
         --- FAIL: failure in parallel test propagates upwards/#00/par (N.NNs)
-		`,
+        `,
 		f: func(t *T) {
 			t.Run("", func(t *T) {
 				t.Parallel()
@@ -210,8 +210,8 @@ func TestTRun(t *T) {
 		desc: "skipping after error",
 		output: `
 --- FAIL: skipping after error (N.NNs)
-	sub_test.go:NNN: an error
-	sub_test.go:NNN: skipped`,
+    sub_test.go:NNN: an error
+    sub_test.go:NNN: skipped`,
 		f: func(t *T) {
 			t.Error("an error")
 			t.Skip("skipped")
@@ -320,9 +320,9 @@ func TestTRun(t *T) {
 		ok:   false,
 		output: `
 --- FAIL: subtest calls error on parent (N.NNs)
-	sub_test.go:NNN: first this
-	sub_test.go:NNN: and now this!
-	sub_test.go:NNN: oh, and this too`,
+    sub_test.go:NNN: first this
+    sub_test.go:NNN: and now this!
+    sub_test.go:NNN: oh, and this too`,
 		maxPar: 1,
 		f: func(t *T) {
 			t.Errorf("first this")
@@ -337,10 +337,10 @@ func TestTRun(t *T) {
 		ok:   false,
 		output: `
 --- FAIL: subtest calls fatal on parent (N.NNs)
-	sub_test.go:NNN: first this
-	sub_test.go:NNN: and now this!
+    sub_test.go:NNN: first this
+    sub_test.go:NNN: and now this!
     --- FAIL: subtest calls fatal on parent/#00 (N.NNs)
-    	testing.go:NNN: test executed panic(nil) or runtime.Goexit: subtest may have called FailNow on a parent test`,
+        testing.go:NNN: test executed panic(nil) or runtime.Goexit: subtest may have called FailNow on a parent test`,
 		maxPar: 1,
 		f: func(t *T) {
 			outer := t
@@ -355,10 +355,10 @@ func TestTRun(t *T) {
 		ok:   false,
 		output: `
 --- FAIL: subtest calls error on ancestor (N.NNs)
-	sub_test.go:NNN: Report to ancestor
+    sub_test.go:NNN: Report to ancestor
     --- FAIL: subtest calls error on ancestor/#00 (N.NNs)
-    	sub_test.go:NNN: Still do this
-	sub_test.go:NNN: Also do this`,
+        sub_test.go:NNN: Still do this
+    sub_test.go:NNN: Also do this`,
 		maxPar: 1,
 		f: func(t *T) {
 			outer := t
@@ -375,7 +375,7 @@ func TestTRun(t *T) {
 		ok:   false,
 		output: `
 --- FAIL: subtest calls fatal on ancestor (N.NNs)
-	sub_test.go:NNN: Nope`,
+    sub_test.go:NNN: Nope`,
 		maxPar: 1,
 		f: func(t *T) {
 			outer := t
@@ -410,6 +410,29 @@ func TestTRun(t *T) {
 			})
 			ch <- true
 			<-ch
+		},
+	}, {
+		desc: "log in finished sub test logs to parent",
+		ok:   false,
+		output: `
+		--- FAIL: log in finished sub test logs to parent (N.NNs)
+    sub_test.go:NNN: message2
+    sub_test.go:NNN: message1
+    sub_test.go:NNN: error`,
+		maxPar: 1,
+		f: func(t *T) {
+			ch := make(chan bool)
+			t.Run("sub", func(t2 *T) {
+				go func() {
+					<-ch
+					t2.Log("message1")
+					ch <- true
+				}()
+			})
+			t.Log("message2")
+			ch <- true
+			<-ch
+			t.Errorf("error")
 		},
 	}}
 	for _, tc := range testCases {
@@ -503,7 +526,7 @@ func TestBRun(t *T) {
 		chatty: true,
 		output: `
 --- SKIP: root
-	sub_test.go:NNN: skipping`,
+    sub_test.go:NNN: skipping`,
 		f: func(b *B) { b.Skip("skipping") },
 	}, {
 		desc:   "chatty with recursion",
@@ -521,8 +544,8 @@ func TestBRun(t *T) {
 		failed: true,
 		output: `
 --- FAIL: root
-	sub_test.go:NNN: an error
-	sub_test.go:NNN: skipped`,
+    sub_test.go:NNN: an error
+    sub_test.go:NNN: skipped`,
 		f: func(b *B) {
 			b.Error("an error")
 			b.Skip("skipped")
@@ -570,7 +593,7 @@ func TestBRun(t *T) {
 				chatty: tc.chatty,
 			},
 			benchFunc: func(b *B) { ok = b.Run("test", tc.f) }, // Use Run to catch failure.
-			benchTime: time.Microsecond,
+			benchTime: benchTimeFlag{d: 1 * time.Microsecond},
 		}
 		root.runN(1)
 		if ok != !tc.failed {
@@ -594,8 +617,8 @@ func TestBRun(t *T) {
 
 func makeRegexp(s string) string {
 	s = regexp.QuoteMeta(s)
-	s = strings.Replace(s, ":NNN:", `:\d\d\d:`, -1)
-	s = strings.Replace(s, "N\\.NNs", `\d*\.\d*s`, -1)
+	s = strings.ReplaceAll(s, ":NNN:", `:\d\d\d:`)
+	s = strings.ReplaceAll(s, "N\\.NNs", `\d*\.\d*s`)
 	return s
 }
 

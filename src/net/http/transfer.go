@@ -11,15 +11,17 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net/http/httptrace"
 	"net/http/internal"
 	"net/textproto"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"golang_org/x/net/lex/httplex"
+	"golang_org/x/net/http/httpguts"
 )
 
 // ErrLineTooLong is returned when reading request or response bodies
@@ -105,6 +107,17 @@ func newTransferWriter(r interface{}) (t *transferWriter, err error) {
 		if t.ContentLength < 0 && len(t.TransferEncoding) == 0 && t.shouldSendChunkedRequestBody() {
 			t.TransferEncoding = []string{"chunked"}
 		}
+		// If there's a body, conservatively flush the headers
+		// to any bufio.Writer we're writing to, just in case
+		// the server needs the headers early, before we copy
+		// the body and possibly block. We make an exception
+		// for the common standard library in-memory types,
+		// though, to avoid unnecessary TCP packets on the
+		// wire. (Issue 22088.)
+		if t.ContentLength != 0 && !isKnownInMemoryReader(t.Body) {
+			t.FlushHeaders = true
+		}
+
 		atLeastHTTP11 = true // Transport requests are always 1.1 or 2.0
 	case *Response:
 		t.IsResponse = true
@@ -169,6 +182,9 @@ func (t *transferWriter) shouldSendChunkedRequestBody() bool {
 	// Note that t.ContentLength is the corrected content length
 	// from rr.outgoingLength, so 0 actually means zero, not unknown.
 	if t.ContentLength >= 0 || t.Body == nil { // redundant checks; caller did them
+		return false
+	}
+	if t.Method == "CONNECT" {
 		return false
 	}
 	if requestMethodUsuallyLacksBody(t.Method) {
@@ -268,10 +284,13 @@ func (t *transferWriter) shouldSendContentLength() bool {
 	return false
 }
 
-func (t *transferWriter) WriteHeader(w io.Writer) error {
+func (t *transferWriter) writeHeader(w io.Writer, trace *httptrace.ClientTrace) error {
 	if t.Close && !hasToken(t.Header.get("Connection"), "close") {
 		if _, err := io.WriteString(w, "Connection: close\r\n"); err != nil {
 			return err
+		}
+		if trace != nil && trace.WroteHeaderField != nil {
+			trace.WroteHeaderField("Connection", []string{"close"})
 		}
 	}
 
@@ -285,9 +304,15 @@ func (t *transferWriter) WriteHeader(w io.Writer) error {
 		if _, err := io.WriteString(w, strconv.FormatInt(t.ContentLength, 10)+"\r\n"); err != nil {
 			return err
 		}
+		if trace != nil && trace.WroteHeaderField != nil {
+			trace.WroteHeaderField("Content-Length", []string{strconv.FormatInt(t.ContentLength, 10)})
+		}
 	} else if chunked(t.TransferEncoding) {
 		if _, err := io.WriteString(w, "Transfer-Encoding: chunked\r\n"); err != nil {
 			return err
+		}
+		if trace != nil && trace.WroteHeaderField != nil {
+			trace.WroteHeaderField("Transfer-Encoding", []string{"chunked"})
 		}
 	}
 
@@ -309,13 +334,16 @@ func (t *transferWriter) WriteHeader(w io.Writer) error {
 			if _, err := io.WriteString(w, "Trailer: "+strings.Join(keys, ",")+"\r\n"); err != nil {
 				return err
 			}
+			if trace != nil && trace.WroteHeaderField != nil {
+				trace.WroteHeaderField("Trailer", keys)
+			}
 		}
 	}
 
 	return nil
 }
 
-func (t *transferWriter) WriteBody(w io.Writer) error {
+func (t *transferWriter) writeBody(w io.Writer) error {
 	var err error
 	var ncopy int64
 
@@ -332,7 +360,11 @@ func (t *transferWriter) WriteBody(w io.Writer) error {
 				err = cw.Close()
 			}
 		} else if t.ContentLength == -1 {
-			ncopy, err = io.Copy(w, body)
+			dst := w
+			if t.Method == "CONNECT" {
+				dst = bufioFlushWriter{dst}
+			}
+			ncopy, err = io.Copy(dst, body)
 		} else {
 			ncopy, err = io.Copy(w, io.LimitReader(body, t.ContentLength))
 			if err != nil {
@@ -690,9 +722,9 @@ func shouldClose(major, minor int, header Header, removeCloseHeader bool) bool {
 	}
 
 	conv := header["Connection"]
-	hasClose := httplex.HeaderValuesContainsToken(conv, "close")
+	hasClose := httpguts.HeaderValuesContainsToken(conv, "close")
 	if major == 1 && minor == 0 {
-		return hasClose || !httplex.HeaderValuesContainsToken(conv, "keep-alive")
+		return hasClose || !httpguts.HeaderValuesContainsToken(conv, "keep-alive")
 	}
 
 	if hasClose && removeCloseHeader {
@@ -917,7 +949,7 @@ func (b *body) Close() error {
 		// no trailer and closing the connection next.
 		// no point in reading to EOF.
 	case b.doEarlyClose:
-		// Read up to maxPostHandlerReadBytes bytes of the body, looking for
+		// Read up to maxPostHandlerReadBytes bytes of the body, looking
 		// for EOF (and trailers), so we can re-use this connection.
 		if lr, ok := b.src.(*io.LimitedReader); ok && lr.N > maxPostHandlerReadBytes {
 			// There was a declared Content-Length, and we have more bytes remaining
@@ -1006,6 +1038,37 @@ func (fr finishAsyncByteRead) Read(p []byte) (n int, err error) {
 	n, err = rres.n, rres.err
 	if n == 1 {
 		p[0] = rres.b
+	}
+	return
+}
+
+var nopCloserType = reflect.TypeOf(ioutil.NopCloser(nil))
+
+// isKnownInMemoryReader reports whether r is a type known to not
+// block on Read. Its caller uses this as an optional optimization to
+// send fewer TCP packets.
+func isKnownInMemoryReader(r io.Reader) bool {
+	switch r.(type) {
+	case *bytes.Reader, *bytes.Buffer, *strings.Reader:
+		return true
+	}
+	if reflect.TypeOf(r) == nopCloserType {
+		return isKnownInMemoryReader(reflect.ValueOf(r).Field(0).Interface().(io.Reader))
+	}
+	return false
+}
+
+// bufioFlushWriter is an io.Writer wrapper that flushes all writes
+// on its wrapped writer if it's a *bufio.Writer.
+type bufioFlushWriter struct{ w io.Writer }
+
+func (fw bufioFlushWriter) Write(p []byte) (n int, err error) {
+	n, err = fw.w.Write(p)
+	if bw, ok := fw.w.(*bufio.Writer); n > 0 && ok {
+		ferr := bw.Flush()
+		if ferr != nil && err == nil {
+			err = ferr
+		}
 	}
 	return
 }

@@ -595,7 +595,7 @@ func (p *iexporter) typOff(t *types.Type) uint64 {
 	if !ok {
 		w := p.newWriter()
 		w.doTyp(t)
-		off = predeclReserved + uint64(w.flush())
+		off = predeclReserved + w.flush()
 		p.typIndex[t] = off
 	}
 	return off
@@ -617,7 +617,7 @@ func (w *exportWriter) doTyp(t *types.Type) {
 	}
 
 	switch t.Etype {
-	case TPTR32, TPTR64:
+	case TPTR:
 		w.startType(pointerType)
 		w.typ(t.Elem())
 
@@ -743,7 +743,7 @@ func constTypeOf(typ *types.Type) Ctype {
 		return CTSTR
 	case TINT, TINT8, TINT16, TINT32, TINT64,
 		TUINT, TUINT8, TUINT16, TUINT32, TUINT64, TUINTPTR,
-		TPTR32, TPTR64, TUNSAFEPTR:
+		TPTR, TUNSAFEPTR:
 		return CTINT
 	case TFLOAT32, TFLOAT64:
 		return CTFLT
@@ -952,6 +952,16 @@ func (w *exportWriter) funcExt(n *Node) {
 		if n.Func.ExportInline() {
 			w.p.doInline(n)
 		}
+
+		// Endlineno for inlined function.
+		if n.Name.Defn != nil {
+			w.pos(n.Name.Defn.Func.Endlineno)
+		} else {
+			// When the exported node was defined externally,
+			// e.g. io exports atomic.(*Value).Load or bytes exports errors.New.
+			// Keep it as we don't distinguish this case in iimport.go.
+			w.pos(n.Func.Endlineno)
+		}
 	} else {
 		w.uint64(0)
 	}
@@ -970,13 +980,17 @@ func (w *exportWriter) linkname(s *types.Sym) {
 
 func (w *exportWriter) stmtList(list Nodes) {
 	for _, n := range list.Slice() {
-		if opprec[n.Op] < 0 {
-			w.stmt(n)
-		} else {
-			w.expr(n)
-		}
+		w.node(n)
 	}
 	w.op(OEND)
+}
+
+func (w *exportWriter) node(n *Node) {
+	if opprec[n.Op] < 0 {
+		w.stmt(n)
+	} else {
+		w.expr(n)
+	}
 }
 
 // Caution: stmt will emit more than one node for statement nodes n that have a non-empty
@@ -1305,12 +1319,6 @@ func (w *exportWriter) expr(n *Node) {
 		w.pos(n.Pos)
 		w.exprList(n.List)
 
-	case OCMPSTR, OCMPIFACE:
-		w.op(n.SubOp())
-		w.pos(n.Pos)
-		w.expr(n.Left)
-		w.expr(n.Right)
-
 	case ODCLCONST:
 		// if exporting, DCLCONST should just be removed as its usage
 		// has already been replaced with literals
@@ -1338,7 +1346,7 @@ func (w *exportWriter) exprsOrNil(a, b *Node) {
 		w.expr(a)
 	}
 	if ab&2 != 0 {
-		w.expr(b)
+		w.node(b)
 	}
 }
 

@@ -7,12 +7,12 @@ package tls
 import (
 	"container/list"
 	"crypto"
-	"crypto/internal/cipherhw"
 	"crypto/rand"
 	"crypto/sha512"
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"internal/cpu"
 	"io"
 	"math/big"
 	"net"
@@ -79,7 +79,7 @@ const (
 	extensionSupportedPoints     uint16 = 11
 	extensionSignatureAlgorithms uint16 = 13
 	extensionALPN                uint16 = 16
-	extensionSCT                 uint16 = 18 // https://tools.ietf.org/html/rfc6962#section-6
+	extensionSCT                 uint16 = 18 // RFC 6962, Section 6
 	extensionSessionTicket       uint16 = 35
 	extensionNextProtoNeg        uint16 = 13172 // not IANA assigned
 	extensionRenegotiationInfo   uint16 = 0xff01
@@ -127,10 +127,12 @@ const (
 	// Rest of these are reserved by the TLS spec
 )
 
-// Signature algorithms for TLS 1.2 (See RFC 5246, section A.4.1)
+// Signature algorithms (for internal signaling use). Starting at 16 to avoid overlap with
+// TLS 1.2 codepoints (RFC 5246, Appendix A.4.1), with which these have nothing to do.
 const (
-	signatureRSA   uint8 = 1
-	signatureECDSA uint8 = 3
+	signaturePKCS1v15 uint8 = iota + 16
+	signatureECDSA
+	signatureRSAPSS
 )
 
 // supportedSignatureAlgorithms contains the signature and hash algorithms that
@@ -162,11 +164,8 @@ type ConnectionState struct {
 	SignedCertificateTimestamps [][]byte              // SCTs from the server, if any
 	OCSPResponse                []byte                // stapled OCSP response from server, if any
 
-	// ExportKeyMaterial returns length bytes of exported key material as
-	// defined in https://tools.ietf.org/html/rfc5705. If context is nil, it is
-	// not used as part of the seed. If Config.Renegotiation was set to allow
-	// renegotiation, this function will always return nil, false.
-	ExportKeyingMaterial func(label string, context []byte, length int) ([]byte, bool)
+	// ekm is a closure exposed via ExportKeyingMaterial.
+	ekm func(label string, context []byte, length int) ([]byte, error)
 
 	// TLSUnique contains the "tls-unique" channel binding value (see RFC
 	// 5929, section 3). For resumed sessions this value will be nil
@@ -175,6 +174,14 @@ type ConnectionState struct {
 	// change in future versions of Go once the TLS master-secret fix has
 	// been standardized and implemented.
 	TLSUnique []byte
+}
+
+// ExportKeyingMaterial returns length bytes of exported key material in a new
+// slice as defined in RFC 5705. If context is nil, it is not used as part of
+// the seed. If the connection was set to allow renegotiation via
+// Config.Renegotiation, this function will return an error.
+func (cs *ConnectionState) ExportKeyingMaterial(label string, context []byte, length int) ([]byte, error) {
+	return cs.ekm(label, context, length)
 }
 
 // ClientAuthType declares the policy the server will follow for
@@ -215,7 +222,7 @@ type ClientSessionCache interface {
 }
 
 // SignatureScheme identifies a signature algorithm supported by TLS. See
-// https://tools.ietf.org/html/draft-ietf-tls-tls13-18#section-4.2.3.
+// RFC 8446, Section 4.2.3.
 type SignatureScheme uint16
 
 const (
@@ -245,32 +252,27 @@ type ClientHelloInfo struct {
 
 	// ServerName indicates the name of the server requested by the client
 	// in order to support virtual hosting. ServerName is only set if the
-	// client is using SNI (see
-	// http://tools.ietf.org/html/rfc4366#section-3.1).
+	// client is using SNI (see RFC 4366, Section 3.1).
 	ServerName string
 
 	// SupportedCurves lists the elliptic curves supported by the client.
 	// SupportedCurves is set only if the Supported Elliptic Curves
-	// Extension is being used (see
-	// http://tools.ietf.org/html/rfc4492#section-5.1.1).
+	// Extension is being used (see RFC 4492, Section 5.1.1).
 	SupportedCurves []CurveID
 
 	// SupportedPoints lists the point formats supported by the client.
 	// SupportedPoints is set only if the Supported Point Formats Extension
-	// is being used (see
-	// http://tools.ietf.org/html/rfc4492#section-5.1.2).
+	// is being used (see RFC 4492, Section 5.1.2).
 	SupportedPoints []uint8
 
 	// SignatureSchemes lists the signature and hash schemes that the client
 	// is willing to verify. SignatureSchemes is set only if the Signature
-	// Algorithms Extension is being used (see
-	// https://tools.ietf.org/html/rfc5246#section-7.4.1.4.1).
+	// Algorithms Extension is being used (see RFC 5246, Section 7.4.1.4.1).
 	SignatureSchemes []SignatureScheme
 
 	// SupportedProtos lists the application protocols supported by the client.
 	// SupportedProtos is set only if the Application-Layer Protocol
-	// Negotiation Extension is being used (see
-	// https://tools.ietf.org/html/rfc7301#section-3.1).
+	// Negotiation Extension is being used (see RFC 7301, Section 3.1).
 	//
 	// Servers can select a protocol by setting Config.NextProtos in a
 	// GetConfigForClient return value.
@@ -459,7 +461,8 @@ type Config struct {
 	PreferServerCipherSuites bool
 
 	// SessionTicketsDisabled may be set to true to disable session ticket
-	// (resumption) support.
+	// (resumption) support. Note that on clients, session ticket support is
+	// also disabled if ClientSessionCache is nil.
 	SessionTicketsDisabled bool
 
 	// SessionTicketKey is used by TLS servers to provide session
@@ -473,7 +476,7 @@ type Config struct {
 	SessionTicketKey [32]byte
 
 	// ClientSessionCache is a cache of ClientSessionState entries for TLS
-	// session resumption.
+	// session resumption. It is only used by clients.
 	ClientSessionCache ClientSessionCache
 
 	// MinVersion contains the minimum SSL/TLS version that is acceptable.
@@ -917,7 +920,19 @@ func defaultCipherSuites() []uint16 {
 
 func initDefaultCipherSuites() {
 	var topCipherSuites []uint16
-	if cipherhw.AESGCMSupport() {
+
+	// Check the cpu flags for each platform that has optimized GCM implementations.
+	// Worst case, these variables will just all be false
+	hasGCMAsmAMD64 := cpu.X86.HasAES && cpu.X86.HasPCLMULQDQ
+
+	hasGCMAsmARM64 := cpu.ARM64.HasAES && cpu.ARM64.HasPMULL
+
+	// Keep in sync with crypto/aes/cipher_s390x.go.
+	hasGCMAsmS390X := cpu.S390X.HasAES && cpu.S390X.HasAESCBC && cpu.S390X.HasAESCTR && (cpu.S390X.HasGHASH || cpu.S390X.HasAESGCM)
+
+	hasGCMAsm := hasGCMAsmAMD64 || hasGCMAsmARM64 || hasGCMAsmS390X
+
+	if hasGCMAsm {
 		// If AES-GCM hardware is provided then prioritise AES-GCM
 		// cipher suites.
 		topCipherSuites = []uint16{
@@ -976,7 +991,9 @@ func isSupportedSignatureAlgorithm(sigAlg SignatureScheme, supportedSignatureAlg
 func signatureFromSignatureScheme(signatureAlgorithm SignatureScheme) uint8 {
 	switch signatureAlgorithm {
 	case PKCS1WithSHA1, PKCS1WithSHA256, PKCS1WithSHA384, PKCS1WithSHA512:
-		return signatureRSA
+		return signaturePKCS1v15
+	case PSSWithSHA256, PSSWithSHA384, PSSWithSHA512:
+		return signatureRSAPSS
 	case ECDSAWithSHA1, ECDSAWithP256AndSHA256, ECDSAWithP384AndSHA384, ECDSAWithP521AndSHA512:
 		return signatureECDSA
 	default:

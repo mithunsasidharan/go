@@ -43,10 +43,6 @@ const (
 )
 
 func dumpobj() {
-	if !dolinkobj {
-		dumpobj1(outfile, modeCompilerObj)
-		return
-	}
 	if linkobj == "" {
 		dumpobj1(outfile, modeCompilerObj|modeLinkerObj)
 		return
@@ -85,12 +81,7 @@ func printObjHeader(bout *bio.Writer) {
 	if localpkg.Name == "main" {
 		fmt.Fprintf(bout, "main\n")
 	}
-	if safemode {
-		fmt.Fprintf(bout, "safe\n")
-	} else {
-		fmt.Fprintf(bout, "----\n") // room for some other tool to write "safe"
-	}
-	fmt.Fprintf(bout, "\n") // header ends with blank line
+	fmt.Fprintf(bout, "\n")     // header ends with blank line
 }
 
 func startArchiveEntry(bout *bio.Writer) int64 {
@@ -281,7 +272,7 @@ func dumpglobls() {
 	funcsyms = nil
 }
 
-// addGCLocals adds gcargs and gclocals symbols to Ctxt.Data.
+// addGCLocals adds gcargs, gclocals, gcregs, and stack object symbols to Ctxt.Data.
 // It takes care not to add any duplicates.
 // Though the object file format handles duplicates efficiently,
 // storing only a single copy of the data,
@@ -292,12 +283,15 @@ func addGCLocals() {
 		if s.Func == nil {
 			continue
 		}
-		for _, gcsym := range []*obj.LSym{&s.Func.GCArgs, &s.Func.GCLocals} {
+		for _, gcsym := range []*obj.LSym{&s.Func.GCArgs, &s.Func.GCLocals, &s.Func.GCRegs} {
 			if seen[gcsym.Name] {
 				continue
 			}
 			Ctxt.Data = append(Ctxt.Data, gcsym)
 			seen[gcsym.Name] = true
+		}
+		if x := s.Func.StackObjects; x != nil {
+			ggloblsym(x, int32(len(x.P)), obj.RODATA|obj.LOCAL)
 		}
 	}
 }

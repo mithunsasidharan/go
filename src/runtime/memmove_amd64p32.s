@@ -7,6 +7,7 @@
 // This could use MOVSQ, but we use MOVSL so that if an object ends in
 // a 4 byte pointer, we copy it as a unit instead of byte by byte.
 
+// func memmove(to, from unsafe.Pointer, n uintptr)
 TEXT runtime·memmove(SB), NOSPLIT, $0-12
 	MOVL	to+0(FP), DI
 	MOVL	from+4(FP), SI
@@ -33,7 +34,7 @@ back:
 	ADDL	BX, DI
 	ADDL	BX, SI
 	STD
-	
+
 	MOVL	BX, CX
 	SHRL	$2, CX
 	ANDL	$3, BX

@@ -1,5 +1,7 @@
 // errorcheck -0 -d=nil
 
+// +build !wasm
+
 // Copyright 2013 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
@@ -244,8 +246,8 @@ type TT struct {
 
 func f(t *TT) *byte {
 	// See issue 17242.
-	s := &t.SS  // ERROR "removed nil check"
-	return &s.x // ERROR "generated nil check"
+	s := &t.SS  // ERROR "generated nil check"
+	return &s.x // ERROR "removed nil check"
 }
 
 // make sure not to do nil check for newobject

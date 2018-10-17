@@ -16,7 +16,6 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -67,17 +66,17 @@ func execSecurityRoots() (*CertPool, error) {
 		"/Library/Keychains/System.keychain",
 	}
 
-	u, err := user.Current()
-	if err != nil {
+	home := os.UserHomeDir()
+	if home == "" {
 		if debugExecDarwinRoots {
-			println(fmt.Sprintf("crypto/x509: get current user: %v", err))
+			println("crypto/x509: can't get user home directory")
 		}
 	} else {
 		args = append(args,
-			filepath.Join(u.HomeDir, "/Library/Keychains/login.keychain"),
+			filepath.Join(home, "/Library/Keychains/login.keychain"),
 
 			// Fresh installs of Sierra use a slightly different path for the login keychain
-			filepath.Join(u.HomeDir, "/Library/Keychains/login.keychain-db"),
+			filepath.Join(home, "/Library/Keychains/login.keychain-db"),
 		)
 	}
 
@@ -181,12 +180,12 @@ func verifyCertWithSystem(block *pem.Block, cert *Certificate) bool {
 	}
 	if err := cmd.Run(); err != nil {
 		if debugExecDarwinRoots {
-			println(fmt.Sprintf("crypto/x509: verify-cert rejected %s: %q", cert.Subject.CommonName, bytes.TrimSpace(stderr.Bytes())))
+			println(fmt.Sprintf("crypto/x509: verify-cert rejected %s: %q", cert.Subject, bytes.TrimSpace(stderr.Bytes())))
 		}
 		return false
 	}
 	if debugExecDarwinRoots {
-		println(fmt.Sprintf("crypto/x509: verify-cert approved %s", cert.Subject.CommonName))
+		println(fmt.Sprintf("crypto/x509: verify-cert approved %s", cert.Subject))
 	}
 	return true
 }

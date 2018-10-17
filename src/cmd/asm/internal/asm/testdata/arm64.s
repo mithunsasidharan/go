@@ -25,6 +25,18 @@ TEXT	foo(SB), DUPOK|NOSPLIT, $-8
 	ADD	R1, R2, R3
 	ADD	R1, ZR, R3
 	ADD	$1, R2, R3
+	ADD	$0x000aaa, R2, R3 // ADD $2730, R2, R3     // 43a82a91
+	ADD	$0x000aaa, R2     // ADD $2730, R2         // 42a82a91
+	ADD	$0xaaa000, R2, R3 // ADD $11182080, R2, R3 // 43a86a91
+	ADD	$0xaaa000, R2     // ADD $11182080, R2     // 42a86a91
+	ADD	$0xaaaaaa, R2, R3 // ADD $11184810, R2, R3 // 43a82a9163a86a91
+	ADD	$0xaaaaaa, R2     // ADD $11184810, R2     // 42a82a9142a86a91
+	SUB	$0x000aaa, R2, R3 // SUB $2730, R2, R3     // 43a82ad1
+	SUB	$0x000aaa, R2     // SUB $2730, R2         // 42a82ad1
+	SUB	$0xaaa000, R2, R3 // SUB $11182080, R2, R3 // 43a86ad1
+	SUB	$0xaaa000, R2     // SUB $11182080, R2     // 42a86ad1
+	SUB	$0xaaaaaa, R2, R3 // SUB $11184810, R2, R3 // 43a82ad163a86ad1
+	SUB	$0xaaaaaa, R2     // SUB $11184810, R2     // 42a82ad142a86ad1
 	ADD	R1>>11, R2, R3
 	ADD	R1<<22, R2, R3
 	ADD	R1->33, R2, R3
@@ -107,6 +119,28 @@ TEXT	foo(SB), DUPOK|NOSPLIT, $-8
 	VSRI	$8, V1.H8, V2.H8                // 2244186f
 	VSRI	$2, V1.B8, V2.B8                // 22440e2f
 	VSRI	$2, V1.B16, V2.B16              // 22440e6f
+	VTBL	V22.B16, [V28.B16, V29.B16], V11.B16                                    // 8b23164e
+	VTBL	V18.B8, [V17.B16, V18.B16, V19.B16], V22.B8                             // 3642120e
+	VTBL	V31.B8, [V14.B16, V15.B16, V16.B16, V17.B16], V15.B8                    // cf611f0e
+	VTBL	V14.B16, [V16.B16], V11.B16                                             // 0b020e4e
+	VTBL	V28.B16, [V25.B16, V26.B16], V5.B16                                     // 25231c4e
+	VTBL	V16.B8, [V4.B16, V5.B16, V6.B16], V12.B8                                // 8c40100e
+	VTBL	V4.B8, [V16.B16, V17.B16, V18.B16, V19.B16], V4.B8                      // 0462040e
+	VTBL	V15.B8, [V1.B16], V20.B8                                                // 34000f0e
+	VTBL	V26.B16, [V2.B16, V3.B16], V26.B16                                      // 5a201a4e
+	VTBL	V15.B8, [V6.B16, V7.B16, V8.B16], V2.B8                                 // c2400f0e
+	VTBL	V2.B16, [V27.B16, V28.B16, V29.B16, V30.B16], V18.B16                   // 7263024e
+	VTBL	V11.B16, [V13.B16], V27.B16                                             // bb010b4e
+	VTBL	V3.B8, [V7.B16, V8.B16], V25.B8                                         // f920030e
+	VTBL	V14.B16, [V3.B16, V4.B16, V5.B16], V17.B16                              // 71400e4e
+	VTBL	V13.B16, [V29.B16, V30.B16, V31.B16, V0.B16], V28.B16                   // bc630d4e
+	VTBL	V3.B8, [V27.B16], V8.B8                                                 // 6803030e
+	VZIP1	V16.H8, V3.H8, V19.H8           // 7338504e
+	VZIP2	V22.D2, V25.D2, V21.D2          // 357bd64e
+	VZIP1	V6.D2, V9.D2, V11.D2            // 2b39c64e
+	VZIP2	V10.D2, V13.D2, V3.D2           // a379ca4e
+	VZIP1	V17.S2, V4.S2, V26.S2           // 9a38910e
+	VZIP2	V25.S2, V14.S2, V25.S2          // d979990e
 	MOVD	(R2)(R6.SXTW), R4               // 44c866f8
 	MOVD	(R3)(R6), R5                    // MOVD	(R3)(R6*1), R5                  // 656866f8
 	MOVD	(R2)(R6), R4                    // MOVD	(R2)(R6*1), R4                  // 446866f8
@@ -141,6 +175,21 @@ TEXT	foo(SB), DUPOK|NOSPLIT, $-8
 	MOVB	(R29)(R30<<0), R14              // ae7bbe38
 	MOVB	(R29)(R30), R14                 // MOVB	(R29)(R30*1), R14                // ae6bbe38
 	MOVB	R4, (R2)(R6.SXTX)               // 44e82638
+	FMOVS	$(4.0), F0                      // 0010221e
+	FMOVD	$(4.0), F0                      // 0010621e
+	FMOVS	$(0.265625), F1                 // 01302a1e
+	FMOVD	$(0.1796875), F2                // 02f0681e
+	FMOVS	$(0.96875), F3                  // 03f02d1e
+	FMOVD	$(28.0), F4                     // 0490671e
+
+	FMOVS	(R2)(R6), F4       // FMOVS (R2)(R6*1), F4    // 446866bc
+	FMOVS	(R2)(R6<<2), F4                               // 447866bc
+	FMOVD	(R2)(R6), F4       // FMOVD (R2)(R6*1), F4    // 446866fc
+	FMOVD	(R2)(R6<<3), F4                               // 447866fc
+	FMOVS	F4, (R2)(R6)       // FMOVS F4, (R2)(R6*1)    // 446826bc
+	FMOVS	F4, (R2)(R6<<2)                               // 447826bc
+	FMOVD	F4, (R2)(R6)       // FMOVD F4, (R2)(R6*1)    // 446826fc
+	FMOVD	F4, (R2)(R6<<3)                               // 447826fc
 
 //	LTYPE1 imsr ',' spreg ','
 //	{
@@ -167,6 +216,15 @@ TEXT	foo(SB), DUPOK|NOSPLIT, $-8
 	ORR	$(1<<63-1), R1 // ORR	$9223372036854775807, R1  // 21f840b2
 	EOR	$(1<<63), R1   // EOR	$-9223372036854775808, R1 // 210041d2
 	EOR	$(1<<63-1), R1 // EOR	$9223372036854775807, R1  // 21f840d2
+
+	AND	$0x22220000, R3, R4   // AND $572653568, R3, R4   // 5b44a4d264001b8a
+	ORR	$0x22220000, R3, R4   // ORR $572653568, R3, R4   // 5b44a4d264001baa
+	EOR	$0x22220000, R3, R4   // EOR $572653568, R3, R4   // 5b44a4d264001bca
+	BIC	$0x22220000, R3, R4   // BIC $572653568, R3, R4   // 5b44a4d264003b8a
+	ORN	$0x22220000, R3, R4   // ORN $572653568, R3, R4   // 5b44a4d264003baa
+	EON	$0x22220000, R3, R4   // EON $572653568, R3, R4   // 5b44a4d264003bca
+	ANDS	$0x22220000, R3, R4   // ANDS $572653568, R3, R4  // 5b44a4d264001bea
+	BICS	$0x22220000, R3, R4   // BICS $572653568, R3, R4  // 5b44a4d264003bea
 
 	AND	$8, R0, RSP // 1f007d92
 	ORR	$8, R0, RSP // 1f007db2
@@ -368,6 +426,18 @@ TEXT	foo(SB), DUPOK|NOSPLIT, $-8
 	CMP	R1>>22, R2
 	CMP	R1<<33, R2
 	CMP	R22.SXTX, RSP // ffe336eb
+
+	CMP	$0x22220000, RSP  // CMP $572653568, RSP   // 5b44a4d2ff633beb
+	CMPW	$0x22220000, RSP  // CMPW $572653568, RSP  // 5b44a4d2ff633b6b
+
+// TST
+	TST	$15, R2                               // 5f0c40f2
+	TST	R1, R2                                // 5f0001ea
+	TST	R1->11, R2                            // 5f2c81ea
+	TST	R1>>22, R2                            // 5f5841ea
+	TST	R1<<33, R2                            // 5f8401ea
+	TST	$0x22220000, R3 // TST $572653568, R3 // 5b44a4d27f001bea
+
 //
 // CBZ
 //
@@ -386,6 +456,7 @@ again:
 //		outcode($1, &$2, NREG, &$4);
 //	}
 	CSET	GT, R1	// e1d79f9a
+	CSETW	HI, R2	// e2979f1a
 //
 // CSEL/CSINC/CSNEG/CSINV
 //
@@ -394,17 +465,22 @@ again:
 //		outgcode($1, &$2, $6.reg, &$4, &$8);
 //	}
 	CSEL	LT, R1, R2, ZR	// 3fb0829a
+	CSELW	LT, R2, R3, R4	// 44b0831a
 	CSINC	GT, R1, ZR, R3	// 23c49f9a
 	CSNEG	MI, R1, R2, R3	// 234482da
 	CSINV	CS, R1, R2, R3	// CSINV HS, R1, R2, R3 // 232082da
+	CSINVW	MI, R2, ZR, R2	// 42409f5a
 
 //		LTYPES cond ',' reg ',' reg
 //	{
 //		outcode($1, &$2, $4.reg, &$6);
 //	}
 	CINC	EQ, R4, R9	// 8914849a
+	CINCW	PL, R2, ZR	// 5f44821a
 	CINV	PL, R11, R22	// 76418bda
+	CINVW	LS, R7, R13	// ed80875a
 	CNEG	LS, R13, R7	// a7858dda
+	CNEGW	EQ, R8, R13	// 0d15885a
 //
 // CCMN
 //
@@ -421,14 +497,14 @@ again:
 //	{
 //		outcode($1, &$2, NREG, &$4);
 //	}
-	FADDD	$0.5, F1 // FADDD $(0.5), F1
+//	FADDD	$0.5, F1 // FADDD $(0.5), F1
 	FADDD	F1, F2
 
 //		LTYPEK frcon ',' freg ',' freg
 //	{
 //		outcode($1, &$2, $4.reg, &$6);
 //	}
-	FADDD	$0.7, F1, F2 // FADDD	$(0.69999999999999996), F1, F2
+//	FADDD	$0.7, F1, F2 // FADDD	$(0.69999999999999996), F1, F2
 	FADDD	F1, F2, F3
 
 //
@@ -515,6 +591,58 @@ again:
 	STXP	(R1, R2), (RSP), R10                 // e10b2ac8
 	STXPW	(R1, R2), (R3), R10                  // 61082a88
 	STXPW	(R1, R2), (RSP), R10                 // e10b2a88
+	SWPD	R5, (R6), R7                         // c78025f8
+	SWPD	R5, (RSP), R7                        // e78325f8
+	SWPW	R5, (R6), R7                         // c78025b8
+	SWPW	R5, (RSP), R7                        // e78325b8
+	SWPH	R5, (R6), R7                         // c7802578
+	SWPH	R5, (RSP), R7                        // e7832578
+	SWPB	R5, (R6), R7                         // c7802538
+	SWPB	R5, (RSP), R7                        // e7832538
+	SWPALD	R5, (R6), R7                         // c780e5f8
+	SWPALD	R5, (RSP), R7                        // e783e5f8
+	SWPALW	R5, (R6), R7                         // c780e5b8
+	SWPALW	R5, (RSP), R7                        // e783e5b8
+	SWPALH	R5, (R6), R7                         // c780e578
+	SWPALH	R5, (RSP), R7                        // e783e578
+	SWPALB	R5, (R6), R7                         // c780e538
+	SWPALB	R5, (RSP), R7                        // e783e538
+	LDADDD	R5, (R6), R7                         // c70025f8
+	LDADDD	R5, (RSP), R7                        // e70325f8
+	LDADDW	R5, (R6), R7                         // c70025b8
+	LDADDW	R5, (RSP), R7                        // e70325b8
+	LDADDH	R5, (R6), R7                         // c7002578
+	LDADDH	R5, (RSP), R7                        // e7032578
+	LDADDB	R5, (R6), R7                         // c7002538
+	LDADDB	R5, (RSP), R7                        // e7032538
+	LDANDD	R5, (R6), R7                         // c71025f8
+	LDANDD	R5, (RSP), R7                        // e71325f8
+	LDANDW	R5, (R6), R7                         // c71025b8
+	LDANDW	R5, (RSP), R7                        // e71325b8
+	LDANDH	R5, (R6), R7                         // c7102578
+	LDANDH	R5, (RSP), R7                        // e7132578
+	LDANDB	R5, (R6), R7                         // c7102538
+	LDANDB	R5, (RSP), R7                        // e7132538
+	LDEORD	R5, (R6), R7                         // c72025f8
+	LDEORD	R5, (RSP), R7                        // e72325f8
+	LDEORW	R5, (R6), R7                         // c72025b8
+	LDEORW	R5, (RSP), R7                        // e72325b8
+	LDEORH	R5, (R6), R7                         // c7202578
+	LDEORH	R5, (RSP), R7                        // e7232578
+	LDEORB	R5, (R6), R7                         // c7202538
+	LDEORB	R5, (RSP), R7                        // e7232538
+	LDORD	R5, (R6), R7                         // c73025f8
+	LDORD	R5, (RSP), R7                        // e73325f8
+	LDORW	R5, (R6), R7                         // c73025b8
+	LDORW	R5, (RSP), R7                        // e73325b8
+	LDORH	R5, (R6), R7                         // c7302578
+	LDORH	R5, (RSP), R7                        // e7332578
+	LDORB	R5, (R6), R7                         // c7302538
+	LDORB	R5, (RSP), R7                        // e7332538
+	LDADDALD	R2, (R1), R3                 // 2300e2f8
+	LDADDALW	R2, (R1), R3                 // 2300e2b8
+	LDADDALH	R2, (R1), R3                 // 2300e278
+	LDADDALB	R2, (R1), R3                 // 2300e238
 
 // RET
 //
@@ -538,6 +666,7 @@ again:
 	CALL	foo(SB)
 
 // LDP/STP
+	LDP	(R0), (R0, R1)      // 000440a9
 	LDP	(R0), (R1, R2)      // 010840a9
 	LDP	8(R0), (R1, R2)     // 018840a9
 	LDP	-8(R0), (R1, R2)    // 01887fa9
@@ -625,15 +754,85 @@ again:
 	STPW	(R3, R4), x(SB)
 	STPW	(R3, R4), x+8(SB)
 
-// SWPD/SWPW/SWPH/SWPB
-	SWPD	R5, (R6), R7    // SWPD (R6), R5, R7   // c78025f8
-	SWPD	R5, (RSP), R7   // SWPD (RSP), R5, R7  // e78325f8
-	SWPW	R5, (R6), R7    // SWPW (R6), R5, R7   // c78025b8
-	SWPW	R5, (RSP), R7   // SWPW (RSP), R5, R7  // e78325b8
-	SWPH	R5, (R6), R7    // SWPH (R6), R5, R7   // c7802578
-	SWPH	R5, (RSP), R7   // SWPH (RSP), R5, R7  // e7832578
-	SWPB	R5, (R6), R7    // SWPB (R6), R5, R7   // c7802538
-	SWPB	R5, (RSP), R7   // SWPB (RSP), R5, R7  // e7832538
+// bit field operation
+	BFI	$0, R1, $1, R2      // 220040b3
+	BFIW	$0, R1, $1, R2      // 22000033
+	SBFIZ	$0, R1, $1, R2      // 22004093
+	SBFIZW	$0, R1, $1, R2      // 22000013
+	UBFIZ	$0, R1, $1, R2      // 220040d3
+	UBFIZW	$0, R1, $1, R2      // 22000053
+
+// FSTPD/FSTPS/FLDPD/FLDPS
+	FLDPD	(R0), (F1, F2)      // 0108406d
+	FLDPD	8(R0), (F1, F2)     // 0188406d
+	FLDPD	-8(R0), (F1, F2)    // 01887f6d
+	FLDPD	11(R0), (F1, F2)    // 1b2c0091610b406d
+	FLDPD	1024(R0), (F1, F2)  // 1b001091610b406d
+	FLDPD.W	8(R0), (F1, F2)     // 0188c06d
+	FLDPD.P	8(R0), (F1, F2)     // 0188c06c
+	FLDPD	(RSP), (F1, F2)     // e10b406d
+	FLDPD	8(RSP), (F1, F2)    // e18b406d
+	FLDPD	-8(RSP), (F1, F2)   // e18b7f6d
+	FLDPD	11(RSP), (F1, F2)   // fb2f0091610b406d
+	FLDPD	1024(RSP), (F1, F2) // fb031091610b406d
+	FLDPD.W	8(RSP), (F1, F2)    // e18bc06d
+	FLDPD.P	8(RSP), (F1, F2)    // e18bc06c
+	FLDPD	-31(R0), (F1, F2)   // 1b7c00d1610b406d
+	FLDPD	-4(R0), (F1, F2)    // 1b1000d1610b406d
+	FLDPD	-8(R0), (F1, F2)    // 01887f6d
+	FLDPD	x(SB), (F1, F2)
+	FLDPD	x+8(SB), (F1, F2)
+	FLDPS	-5(R0), (F1, F2)    // 1b1400d1610b402d
+	FLDPS	(R0), (F1, F2)      // 0108402d
+	FLDPS	4(R0), (F1, F2)     // 0188402d
+	FLDPS	-4(R0), (F1, F2)    // 01887f2d
+	FLDPS.W	4(R0), (F1, F2)     // 0188c02d
+	FLDPS.P	4(R0), (F1, F2)     // 0188c02c
+	FLDPS	11(R0), (F1, F2)    // 1b2c0091610b402d
+	FLDPS	1024(R0), (F1, F2)  // 1b001091610b402d
+	FLDPS	(RSP), (F1, F2)     // e10b402d
+	FLDPS	4(RSP), (F1, F2)    // e18b402d
+	FLDPS	-4(RSP), (F1, F2)   // e18b7f2d
+	FLDPS.W	4(RSP), (F1, F2)    // e18bc02d
+	FLDPS.P	4(RSP), (F1, F2)    // e18bc02c
+	FLDPS	11(RSP), (F1, F2)   // fb2f0091610b402d
+	FLDPS	1024(RSP), (F1, F2) // fb031091610b402d
+	FLDPS	x(SB), (F1, F2)
+	FLDPS	x+8(SB), (F1, F2)
+	FSTPD	(F3, F4), (R5)      // a310006d
+	FSTPD	(F3, F4), 8(R5)     // a390006d
+	FSTPD.W	(F3, F4), 8(R5)     // a390806d
+	FSTPD.P	(F3, F4), 8(R5)     // a390806c
+	FSTPD	(F3, F4), -8(R5)    // a3903f6d
+	FSTPD	(F3, F4), -4(R5)    // bb1000d16313006d
+	FSTPD	(F3, F4), 11(R0)    // 1b2c00916313006d
+	FSTPD	(F3, F4), 1024(R0)  // 1b0010916313006d
+	FSTPD	(F3, F4), (RSP)     // e313006d
+	FSTPD	(F3, F4), 8(RSP)    // e393006d
+	FSTPD.W	(F3, F4), 8(RSP)    // e393806d
+	FSTPD.P	(F3, F4), 8(RSP)    // e393806c
+	FSTPD	(F3, F4), -8(RSP)   // e3933f6d
+	FSTPD	(F3, F4), 11(RSP)   // fb2f00916313006d
+	FSTPD	(F3, F4), 1024(RSP) // fb0310916313006d
+	FSTPD	(F3, F4), x(SB)
+	FSTPD	(F3, F4), x+8(SB)
+	FSTPS	(F3, F4), (R5)      // a310002d
+	FSTPS	(F3, F4), 4(R5)     // a390002d
+	FSTPS.W	(F3, F4), 4(R5)     // a390802d
+	FSTPS.P	(F3, F4), 4(R5)     // a390802c
+	FSTPS	(F3, F4), -4(R5)    // a3903f2d
+	FSTPS	(F3, F4), -5(R5)    // bb1400d16313002d
+	FSTPS	(F3, F4), 11(R0)    // 1b2c00916313002d
+	FSTPS	(F3, F4), 1024(R0)  // 1b0010916313002d
+	FSTPS	(F3, F4), (RSP)     // e313002d
+	FSTPS	(F3, F4), 4(RSP)    // e393002d
+	FSTPS.W	(F3, F4), 4(RSP)    // e393802d
+	FSTPS.P	(F3, F4), 4(RSP)    // e393802c
+	FSTPS	(F3, F4), -4(RSP)   // e3933f2d
+	FSTPS	(F3, F4), 11(RSP)   // fb2f00916313002d
+	FSTPS	(F3, F4), 1024(RSP) // fb0310916313002d
+	FSTPS	(F3, F4), x(SB)
+	FSTPS	(F3, F4), x+8(SB)
 
 // END
 //

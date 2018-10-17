@@ -9,7 +9,7 @@
 TEXT ·Equal(SB),NOSPLIT,$0-25
 	MOVW	a_len+4(FP), R1
 	MOVW	b_len+16(FP), R3
-	
+
 	CMP	R1, R3		// unequal lengths are not equal
 	B.NE	notequal
 
@@ -36,6 +36,7 @@ equal:
 	RET
 
 TEXT bytes·Equal(SB),NOSPLIT,$0-25
+	FUNCDATA $0, ·Equal·args_stackmap(SB)
 	JMP	·Equal(SB)
 
 // memequal(a, b unsafe.Pointer, size uintptr) bool

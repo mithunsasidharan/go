@@ -153,6 +153,24 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 			p.To.Reg = y
 		}
 
+	case ssa.OpPPC64LoweredMuluhilo:
+		// MULHDU	Rarg1, Rarg0, Reg0
+		// MULLD	Rarg1, Rarg0, Reg1
+		r0 := v.Args[0].Reg()
+		r1 := v.Args[1].Reg()
+		p := s.Prog(ppc64.AMULHDU)
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = r1
+		p.Reg = r0
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = v.Reg0()
+		p1 := s.Prog(ppc64.AMULLD)
+		p1.From.Type = obj.TYPE_REG
+		p1.From.Reg = r1
+		p1.Reg = r0
+		p1.To.Type = obj.TYPE_REG
+		p1.To.Reg = v.Reg1()
+
 	case ssa.OpPPC64LoweredAtomicAnd8,
 		ssa.OpPPC64LoweredAtomicOr8:
 		// LWSYNC
@@ -431,6 +449,11 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.To.Type = obj.TYPE_REG
 		p.To.Reg = v.Reg()
 
+	case ssa.OpPPC64LoweredGetCallerPC:
+		p := s.Prog(obj.AGETCALLERPC)
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = v.Reg()
+
 	case ssa.OpPPC64LoweredRound32F, ssa.OpPPC64LoweredRound64F:
 		// input is already rounded
 
@@ -614,35 +637,31 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.To.Reg = ppc64.REGTMP // discard result
 
 	case ssa.OpPPC64MOVDaddr:
-		p := s.Prog(ppc64.AMOVD)
-		p.From.Type = obj.TYPE_ADDR
-		p.From.Reg = v.Args[0].Reg()
-		p.To.Type = obj.TYPE_REG
-		p.To.Reg = v.Reg()
-
-		var wantreg string
-		// Suspect comment, copied from ARM code
-		// MOVD $sym+off(base), R
-		// the assembler expands it as the following:
-		// - base is SP: add constant offset to SP
-		//               when constant is large, tmp register (R11) may be used
-		// - base is SB: load external address from constant pool (use relocation)
 		switch v.Aux.(type) {
 		default:
-			v.Fatalf("aux is of unknown type %T", v.Aux)
-		case *obj.LSym:
-			wantreg = "SB"
-			gc.AddAux(&p.From, v)
-		case *gc.Node:
-			wantreg = "SP"
-			gc.AddAux(&p.From, v)
+			v.Fatalf("aux in MOVDaddr is of unknown type %T", v.Aux)
 		case nil:
-			// No sym, just MOVD $off(SP), R
-			wantreg = "SP"
-			p.From.Offset = v.AuxInt
-		}
-		if reg := v.Args[0].RegName(); reg != wantreg {
-			v.Fatalf("bad reg %s for symbol type %T, want %s", reg, v.Aux, wantreg)
+			// If aux offset and aux int are both 0, and the same
+			// input and output regs are used, no instruction
+			// needs to be generated, since it would just be
+			// addi rx, rx, 0.
+			if v.AuxInt != 0 || v.Args[0].Reg() != v.Reg() {
+				p := s.Prog(ppc64.AMOVD)
+				p.From.Type = obj.TYPE_ADDR
+				p.From.Reg = v.Args[0].Reg()
+				p.From.Offset = v.AuxInt
+				p.To.Type = obj.TYPE_REG
+				p.To.Reg = v.Reg()
+			}
+
+		case *obj.LSym, *gc.Node:
+			p := s.Prog(ppc64.AMOVD)
+			p.From.Type = obj.TYPE_ADDR
+			p.From.Reg = v.Args[0].Reg()
+			p.To.Type = obj.TYPE_REG
+			p.To.Reg = v.Reg()
+			gc.AddAux(&p.From, v)
+
 		}
 
 	case ssa.OpPPC64MOVDconst:
@@ -716,7 +735,7 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		// Not a go.string, generate a normal load
 		fallthrough
 
-	case ssa.OpPPC64MOVWload, ssa.OpPPC64MOVHload, ssa.OpPPC64MOVWZload, ssa.OpPPC64MOVBZload, ssa.OpPPC64MOVHZload:
+	case ssa.OpPPC64MOVWload, ssa.OpPPC64MOVHload, ssa.OpPPC64MOVWZload, ssa.OpPPC64MOVBZload, ssa.OpPPC64MOVHZload, ssa.OpPPC64FMOVDload, ssa.OpPPC64FMOVSload:
 		p := s.Prog(v.Op.Asm())
 		p.From.Type = obj.TYPE_MEM
 		p.From.Reg = v.Args[0].Reg()
@@ -724,10 +743,27 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.To.Type = obj.TYPE_REG
 		p.To.Reg = v.Reg()
 
-	case ssa.OpPPC64FMOVDload, ssa.OpPPC64FMOVSload:
+	case ssa.OpPPC64MOVDBRload, ssa.OpPPC64MOVWBRload, ssa.OpPPC64MOVHBRload:
 		p := s.Prog(v.Op.Asm())
 		p.From.Type = obj.TYPE_MEM
 		p.From.Reg = v.Args[0].Reg()
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = v.Reg()
+
+	case ssa.OpPPC64MOVDBRstore, ssa.OpPPC64MOVWBRstore, ssa.OpPPC64MOVHBRstore:
+		p := s.Prog(v.Op.Asm())
+		p.To.Type = obj.TYPE_MEM
+		p.To.Reg = v.Args[0].Reg()
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = v.Args[1].Reg()
+
+	case ssa.OpPPC64MOVDloadidx, ssa.OpPPC64MOVWloadidx, ssa.OpPPC64MOVHloadidx, ssa.OpPPC64MOVWZloadidx,
+		ssa.OpPPC64MOVBZloadidx, ssa.OpPPC64MOVHZloadidx, ssa.OpPPC64FMOVDloadidx, ssa.OpPPC64FMOVSloadidx,
+		ssa.OpPPC64MOVDBRloadidx, ssa.OpPPC64MOVWBRloadidx, ssa.OpPPC64MOVHBRloadidx:
+		p := s.Prog(v.Op.Asm())
+		p.From.Type = obj.TYPE_MEM
+		p.From.Reg = v.Args[0].Reg()
+		p.From.Index = v.Args[1].Reg()
 		gc.AddAux(&p.From, v)
 		p.To.Type = obj.TYPE_REG
 		p.To.Reg = v.Reg()
@@ -740,17 +776,21 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.To.Reg = v.Args[0].Reg()
 		gc.AddAux(&p.To, v)
 
-	case ssa.OpPPC64MOVDstore, ssa.OpPPC64MOVWstore, ssa.OpPPC64MOVHstore, ssa.OpPPC64MOVBstore:
+	case ssa.OpPPC64MOVDstore, ssa.OpPPC64MOVWstore, ssa.OpPPC64MOVHstore, ssa.OpPPC64MOVBstore, ssa.OpPPC64FMOVDstore, ssa.OpPPC64FMOVSstore:
 		p := s.Prog(v.Op.Asm())
 		p.From.Type = obj.TYPE_REG
 		p.From.Reg = v.Args[1].Reg()
 		p.To.Type = obj.TYPE_MEM
 		p.To.Reg = v.Args[0].Reg()
 		gc.AddAux(&p.To, v)
-	case ssa.OpPPC64FMOVDstore, ssa.OpPPC64FMOVSstore:
+
+	case ssa.OpPPC64MOVDstoreidx, ssa.OpPPC64MOVWstoreidx, ssa.OpPPC64MOVHstoreidx, ssa.OpPPC64MOVBstoreidx,
+		ssa.OpPPC64FMOVDstoreidx, ssa.OpPPC64FMOVSstoreidx, ssa.OpPPC64MOVDBRstoreidx, ssa.OpPPC64MOVWBRstoreidx,
+		ssa.OpPPC64MOVHBRstoreidx:
 		p := s.Prog(v.Op.Asm())
 		p.From.Type = obj.TYPE_REG
-		p.From.Reg = v.Args[1].Reg()
+		p.From.Reg = v.Args[2].Reg()
+		p.To.Index = v.Args[1].Reg()
 		p.To.Type = obj.TYPE_MEM
 		p.To.Reg = v.Args[0].Reg()
 		gc.AddAux(&p.To, v)
@@ -927,7 +967,7 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 	case ssa.OpPPC64LoweredMove:
 
 		// This will be used when moving more
-		// than 8 bytes.  Moves start with as
+		// than 8 bytes.  Moves start with
 		// as many 8 byte moves as possible, then
 		// 4, 2, or 1 byte(s) as remaining.  This will
 		// work and be efficient for power8 or later.

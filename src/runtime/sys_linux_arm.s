@@ -36,7 +36,7 @@
 #define SYS_setitimer (SYS_BASE + 104)
 #define SYS_mincore (SYS_BASE + 219)
 #define SYS_gettid (SYS_BASE + 224)
-#define SYS_tkill (SYS_BASE + 238)
+#define SYS_tgkill (SYS_BASE + 268)
 #define SYS_sched_yield (SYS_BASE + 158)
 #define SYS_nanosleep (SYS_BASE + 162)
 #define SYS_sched_getaffinity (SYS_BASE + 242)
@@ -138,11 +138,15 @@ TEXT runtime·gettid(SB),NOSPLIT,$0-4
 	RET
 
 TEXT	runtime·raise(SB),NOSPLIT|NOFRAME,$0
+	MOVW	$SYS_getpid, R7
+	SWI	$0
+	MOVW	R0, R4
 	MOVW	$SYS_gettid, R7
 	SWI	$0
-	// arg 1 tid already in R0 from gettid
-	MOVW	sig+0(FP), R1	// arg 2 - signal
-	MOVW	$SYS_tkill, R7
+	MOVW	R0, R1	// arg 2 tid
+	MOVW	R4, R0	// arg 1 pid
+	MOVW	sig+0(FP), R2	// arg 3
+	MOVW	$SYS_tgkill, R7
 	SWI	$0
 	RET
 
@@ -191,7 +195,7 @@ TEXT runtime·madvise(SB),NOSPLIT,$0
 	MOVW	flags+8(FP), R2
 	MOVW	$SYS_madvise, R7
 	SWI	$0
-	// ignore failure - maybe pages are locked
+	MOVW	R0, ret+12(FP)
 	RET
 
 TEXT runtime·setitimer(SB),NOSPLIT,$0
@@ -489,13 +493,18 @@ TEXT runtime·usleep(SB),NOSPLIT,$12
 // even on single-core devices. The kernel helper takes care of all of
 // this for us.
 
-TEXT publicationBarrier<>(SB),NOSPLIT,$0
+TEXT kernelPublicationBarrier<>(SB),NOSPLIT,$0
 	// void __kuser_memory_barrier(void);
-	MOVW	$0xffff0fa0, R15 // R15 is hardware PC.
+	MOVW	$0xffff0fa0, R11
+	CALL	(R11)
+	RET
 
 TEXT ·publicationBarrier(SB),NOSPLIT,$0
-	BL	publicationBarrier<>(SB)
-	RET
+	MOVB	·goarm(SB), R11
+	CMP	$7, R11
+	BLT	2(PC)
+	JMP	·armPublicationBarrier(SB)
+	JMP	kernelPublicationBarrier<>(SB) // extra layer so this function is leaf and no SP adjustment on GOARM=7
 
 TEXT runtime·osyield(SB),NOSPLIT,$0
 	MOVW	$SYS_sched_yield, R7

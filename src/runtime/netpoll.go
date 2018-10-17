@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build darwin dragonfly freebsd linux nacl netbsd openbsd solaris windows
+// +build aix darwin dragonfly freebsd js,wasm linux nacl netbsd openbsd solaris windows
 
 package runtime
 
@@ -166,8 +166,8 @@ func poll_runtime_pollWait(pd *pollDesc, mode int) int {
 	if err != 0 {
 		return err
 	}
-	// As for now only Solaris uses level-triggered IO.
-	if GOOS == "solaris" {
+	// As for now only Solaris and AIX use level-triggered IO.
+	if GOOS == "solaris" || GOOS == "aix" {
 		netpollarm(pd, mode)
 	}
 	for !netpollblock(pd, int32(mode), false) {
@@ -289,24 +289,22 @@ func poll_runtime_pollUnblock(pd *pollDesc) {
 	}
 }
 
-// make pd ready, newly runnable goroutines (if any) are returned in rg/wg
+// make pd ready, newly runnable goroutines (if any) are added to toRun.
 // May run during STW, so write barriers are not allowed.
 //go:nowritebarrier
-func netpollready(gpp *guintptr, pd *pollDesc, mode int32) {
-	var rg, wg guintptr
+func netpollready(toRun *gList, pd *pollDesc, mode int32) {
+	var rg, wg *g
 	if mode == 'r' || mode == 'r'+'w' {
-		rg.set(netpollunblock(pd, 'r', true))
+		rg = netpollunblock(pd, 'r', true)
 	}
 	if mode == 'w' || mode == 'r'+'w' {
-		wg.set(netpollunblock(pd, 'w', true))
+		wg = netpollunblock(pd, 'w', true)
 	}
-	if rg != 0 {
-		rg.ptr().schedlink = *gpp
-		*gpp = rg
+	if rg != nil {
+		toRun.push(rg)
 	}
-	if wg != 0 {
-		wg.ptr().schedlink = *gpp
-		*gpp = wg
+	if wg != nil {
+		toRun.push(wg)
 	}
 }
 
@@ -363,7 +361,7 @@ func netpollblock(pd *pollDesc, mode int32, waitio bool) bool {
 	// this is necessary because runtime_pollUnblock/runtime_pollSetDeadline/deadlineimpl
 	// do the opposite: store to closing/rd/wd, membarrier, load of rg/wg
 	if waitio || netpollcheckerr(pd, mode) == 0 {
-		gopark(netpollblockcommit, unsafe.Pointer(gpp), "IO wait", traceEvGoBlockNet, 5)
+		gopark(netpollblockcommit, unsafe.Pointer(gpp), waitReasonIOWait, traceEvGoBlockNet, 5)
 	}
 	// be careful to not lose concurrent READY notification
 	old := atomic.Xchguintptr(gpp, 0)

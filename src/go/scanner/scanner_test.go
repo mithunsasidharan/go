@@ -9,6 +9,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -204,7 +205,9 @@ func newlineCount(s string) int {
 
 func checkPos(t *testing.T, lit string, p token.Pos, expected token.Position) {
 	pos := fset.Position(p)
-	if pos.Filename != expected.Filename {
+	// Check cleaned filenames so that we don't have to worry about
+	// different os.PathSeparator values.
+	if pos.Filename != expected.Filename && filepath.Clean(pos.Filename) != filepath.Clean(expected.Filename) {
 		t.Errorf("bad filename for %q: got %s, expected %s", lit, pos.Filename, expected.Filename)
 	}
 	if pos.Offset != expected.Offset {
@@ -520,7 +523,7 @@ var segments = []segment{
 	{"\n //line foo:42\n  line43", "foo\t", 44, 0}, // bad line comment, ignored (use existing, prior filename)
 	{"\n//line foo 42\n  line44", "foo\t", 46, 0},  // bad line comment, ignored (use existing, prior filename)
 	{"\n//line /bar:42\n  line45", "/bar", 42, 0},
-	{"\n//line ./foo:42\n  line46", "./foo", 42, 0},
+	{"\n//line ./foo:42\n  line46", "foo", 42, 0},
 	{"\n//line a/b/c/File1.go:100\n  line100", "a/b/c/File1.go", 100, 0},
 	{"\n//line c:\\bar:42\n  line200", "c:\\bar", 42, 0},
 	{"\n//line c:\\dir\\File1.go:100\n  line201", "c:\\dir\\File1.go", 100, 0},
@@ -539,9 +542,32 @@ var segments = []segment{
 	{"\n/*line foo:100:10*/\n\nf2", "foo", 102, 1},  // absolute column since on new line
 }
 
+var dirsegments = []segment{
+	// exactly one token per line since the test consumes one token per segment
+	{"  line1", "TestLineDir/TestLineDirectives", 1, 3},
+	{"\n//line File1.go:100\n  line100", "TestLineDir/File1.go", 100, 0},
+}
+
+var dirUnixSegments = []segment{
+	{"\n//line /bar:42\n  line42", "/bar", 42, 0},
+}
+
+var dirWindowsSegments = []segment{
+	{"\n//line c:\\bar:42\n  line42", "c:\\bar", 42, 0},
+}
+
 // Verify that line directives are interpreted correctly.
 func TestLineDirectives(t *testing.T) {
-	// make source
+	testSegments(t, segments, "TestLineDirectives")
+	testSegments(t, dirsegments, "TestLineDir/TestLineDirectives")
+	if runtime.GOOS == "windows" {
+		testSegments(t, dirWindowsSegments, "TestLineDir/TestLineDirectives")
+	} else {
+		testSegments(t, dirUnixSegments, "TestLineDir/TestLineDirectives")
+	}
+}
+
+func testSegments(t *testing.T, segments []segment, filename string) {
 	var src string
 	for _, e := range segments {
 		src += e.srcline
@@ -549,7 +575,7 @@ func TestLineDirectives(t *testing.T) {
 
 	// verify scan
 	var S Scanner
-	file := fset.AddFile("TestLineDirectives", fset.Base(), len(src))
+	file := fset.AddFile(filename, fset.Base(), len(src))
 	S.Init(file, []byte(src), func(pos token.Position, msg string) { t.Error(Error{pos, msg}) }, dontInsertSemis)
 	for _, s := range segments {
 		p, _, lit := S.Scan()
@@ -731,6 +757,7 @@ var errors = []struct {
 	{"\a", token.ILLEGAL, 0, "", "illegal character U+0007"},
 	{`#`, token.ILLEGAL, 0, "", "illegal character U+0023 '#'"},
 	{`…`, token.ILLEGAL, 0, "", "illegal character U+2026 '…'"},
+	{"..", token.PERIOD, 0, "", ""}, // two periods, not invalid token (issue #28112)
 	{`' '`, token.CHAR, 0, `' '`, ""},
 	{`''`, token.CHAR, 0, `''`, "illegal rune literal"},
 	{`'12'`, token.CHAR, 0, `'12'`, "illegal rune literal"},
@@ -796,7 +823,7 @@ func TestScanErrors(t *testing.T) {
 
 // Verify that no comments show up as literal values when skipping comments.
 func TestIssue10213(t *testing.T) {
-	var src = `
+	const src = `
 		var (
 			A = 1 // foo
 		)
@@ -825,6 +852,23 @@ func TestIssue10213(t *testing.T) {
 		}
 		if tok <= token.EOF {
 			break
+		}
+	}
+}
+
+func TestIssue28112(t *testing.T) {
+	const src = "... .. 0.. .." // make sure to have stand-alone ".." immediately before EOF to test EOF behavior
+	tokens := []token.Token{token.ELLIPSIS, token.PERIOD, token.PERIOD, token.FLOAT, token.PERIOD, token.PERIOD, token.PERIOD, token.EOF}
+	var s Scanner
+	s.Init(fset.AddFile("", fset.Base(), len(src)), []byte(src), nil, 0)
+	for _, want := range tokens {
+		pos, got, lit := s.Scan()
+		if got != want {
+			t.Errorf("%s: got %s, want %s", fset.Position(pos), got, want)
+		}
+		// literals expect to have a (non-empty) literal string and we don't care about other tokens for this test
+		if tokenclass(got) == literal && lit == "" {
+			t.Errorf("%s: for %s got empty literal string", fset.Position(pos), got)
 		}
 	}
 }

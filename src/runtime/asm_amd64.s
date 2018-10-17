@@ -92,7 +92,7 @@ TEXT runtime·rt0_go(SB),NOSPLIT,$0
 	ANDQ	$~15, SP
 	MOVQ	AX, 16(SP)
 	MOVQ	BX, 24(SP)
-	
+
 	// create istack out of the given (operating system) stack.
 	// _cgo_init may update stackguard.
 	MOVQ	$runtime·g0(SB), DI
@@ -127,38 +127,6 @@ notintel:
 	CPUID
 	MOVL	AX, runtime·processorVersionInfo(SB)
 
-	TESTL	$(1<<26), DX // SSE2
-	SETNE	runtime·support_sse2(SB)
-
-	TESTL	$(1<<19), CX // SSE4.1
-	SETNE	runtime·support_sse41(SB)
-
-	TESTL	$(1<<23), CX // POPCNT
-	SETNE	runtime·support_popcnt(SB)
-
-	TESTL	$(1<<27), CX // OSXSAVE
-	SETNE	runtime·support_osxsave(SB)
-
-eax7:
-	// Load EAX=7/ECX=0 cpuid flags
-	CMPL	SI, $7
-	JLT	osavx
-	MOVL	$7, AX
-	MOVL	$0, CX
-	CPUID
-
-	TESTL	$(1<<9), BX // ERMS
-	SETNE	runtime·support_erms(SB)
-
-osavx:
-	CMPB	runtime·support_osxsave(SB), $1
-	JNE	nocpuinfo
-	MOVL	$0, CX
-	// For XGETBV, OSXSAVE bit is required and sufficient
-	XGETBV
-	ANDL	$6, AX
-	CMPL	AX, $6 // Check for OS support of XMM and YMM registers.
-
 nocpuinfo:
 	// if there is an _cgo_init, call it.
 	MOVQ	_cgo_init(SB), AX
@@ -186,6 +154,10 @@ needtls:
 #endif
 #ifdef GOOS_solaris
 	// skip TLS setup on Solaris
+	JMP ok
+#endif
+#ifdef GOOS_darwin
+	// skip TLS setup on Darwin
 	JMP ok
 #endif
 
@@ -236,6 +208,11 @@ ok:
 	CALL	runtime·abort(SB)	// mstart should never return
 	RET
 
+	// Prevent dead-code elimination of debugCallV1, which is
+	// intended to be called by debuggers.
+	MOVQ	$runtime·debugCallV1(SB), AX
+	RET
+
 DATA	runtime·mainPC+0(SB)/8,$runtime·main(SB)
 GLOBL	runtime·mainPC(SB),RODATA,$8
 
@@ -251,7 +228,7 @@ TEXT runtime·asminit(SB),NOSPLIT,$0-0
  *  go-routine
  */
 
-// void gosave(Gobuf*)
+// func gosave(buf *gobuf)
 // save state in Gobuf; setjmp
 TEXT runtime·gosave(SB), NOSPLIT, $0-8
 	MOVQ	buf+0(FP), AX		// gobuf
@@ -271,7 +248,7 @@ TEXT runtime·gosave(SB), NOSPLIT, $0-8
 	MOVQ	BX, gobuf_g(AX)
 	RET
 
-// void gogo(Gobuf*)
+// func gogo(buf *gobuf)
 // restore state from Gobuf; longjmp
 TEXT runtime·gogo(SB), NOSPLIT, $16-8
 	MOVQ	buf+0(FP), BX		// gobuf
@@ -296,7 +273,7 @@ TEXT runtime·gogo(SB), NOSPLIT, $16-8
 // to keep running g.
 TEXT runtime·mcall(SB), NOSPLIT, $0-8
 	MOVQ	fn+0(FP), DI
-	
+
 	get_tls(CX)
 	MOVQ	g(CX), AX	// save state in g->sched
 	MOVQ	0(SP), BX	// caller's PC
@@ -583,7 +560,8 @@ TEXT ·publicationBarrier(SB),NOSPLIT,$0-0
 	// compile barrier.
 	RET
 
-// void jmpdefer(fn, sp);
+// func jmpdefer(fv *funcval, argp uintptr)
+// argp is a caller SP.
 // called from deferreturn.
 // 1. pop the caller
 // 2. sub 5 bytes from the callers return
@@ -639,7 +617,7 @@ TEXT ·asmcgocall(SB),NOSPLIT,$0-20
 	MOVQ	m_gsignal(R8), SI
 	CMPQ	SI, DI
 	JEQ	nosave
-	
+
 	// Switch to system stack.
 	MOVQ	m_g0(R8), SI
 	CALL	gosave<>(SB)
@@ -693,7 +671,7 @@ nosave:
 	MOVL	AX, ret+16(FP)
 	RET
 
-// cgocallback(void (*fn)(void*), void *frame, uintptr framesize, uintptr ctxt)
+// func cgocallback(fn, frame unsafe.Pointer, framesize, ctxt uintptr)
 // Turn the fn into a Go func (by taking its address) and call
 // cgocallback_gofunc.
 TEXT runtime·cgocallback(SB),NOSPLIT,$32-32
@@ -709,7 +687,7 @@ TEXT runtime·cgocallback(SB),NOSPLIT,$32-32
 	CALL	AX
 	RET
 
-// cgocallback_gofunc(FuncVal*, void *frame, uintptr framesize, uintptr ctxt)
+// func cgocallback_gofunc(fn, frame, framesize, ctxt uintptr)
 // See cgocall.go for more details.
 TEXT ·cgocallback_gofunc(SB),NOSPLIT,$16-32
 	NO_LOCAL_POINTERS
@@ -739,7 +717,7 @@ needm:
 	get_tls(CX)
 	MOVQ	g(CX), BX
 	MOVQ	g_m(BX), BX
-	
+
 	// Set m->sched.sp = SP, so that if a panic happens
 	// during the function we are about to execute, it will
 	// have a valid SP to run on the g0 stack.
@@ -823,7 +801,7 @@ havem:
 	MOVQ	(g_sched+gobuf_sp)(SI), SP
 	MOVQ	0(SP), AX
 	MOVQ	AX, (g_sched+gobuf_sp)(SI)
-	
+
 	// If the m on entry was nil, we called needm above to borrow an m
 	// for the duration of the call. Since the call is over, return it with dropm.
 	CMPQ	R8, $0
@@ -834,7 +812,8 @@ havem:
 	// Done!
 	RET
 
-// void setg(G*); set g. for use by needm.
+// func setg(gg *g)
+// set g. for use by needm.
 TEXT runtime·setg(SB), NOSPLIT, $0-8
 	MOVQ	gg+0(FP), BX
 #ifdef GOOS_windows
@@ -889,6 +868,7 @@ done:
 	MOVQ	AX, ret+0(FP)
 	RET
 
+// func aeshash(p unsafe.Pointer, h, s uintptr) uintptr
 // hash function using AES hardware instructions
 TEXT runtime·aeshash(SB),NOSPLIT,$0-32
 	MOVQ	p+0(FP), AX	// ptr to data
@@ -896,6 +876,7 @@ TEXT runtime·aeshash(SB),NOSPLIT,$0-32
 	LEAQ	ret+24(FP), DX
 	JMP	runtime·aeshashbody(SB)
 
+// func aeshashstr(p unsafe.Pointer, h uintptr) uintptr
 TEXT runtime·aeshashstr(SB),NOSPLIT,$0-24
 	MOVQ	p+0(FP), AX	// ptr to string struct
 	MOVQ	8(AX), CX	// length of string
@@ -972,7 +953,7 @@ aes17to32:
 	// make second starting seed
 	PXOR	runtime·aeskeysched+16(SB), X1
 	AESENC	X1, X1
-	
+
 	// load data to be hashed
 	MOVOU	(AX), X2
 	MOVOU	-16(AX)(CX*1), X3
@@ -1004,7 +985,7 @@ aes33to64:
 	AESENC	X1, X1
 	AESENC	X2, X2
 	AESENC	X3, X3
-	
+
 	MOVOU	(AX), X4
 	MOVOU	16(AX), X5
 	MOVOU	-32(AX)(CX*1), X6
@@ -1014,17 +995,17 @@ aes33to64:
 	PXOR	X1, X5
 	PXOR	X2, X6
 	PXOR	X3, X7
-	
+
 	AESENC	X4, X4
 	AESENC	X5, X5
 	AESENC	X6, X6
 	AESENC	X7, X7
-	
+
 	AESENC	X4, X4
 	AESENC	X5, X5
 	AESENC	X6, X6
 	AESENC	X7, X7
-	
+
 	AESENC	X4, X4
 	AESENC	X5, X5
 	AESENC	X6, X6
@@ -1140,7 +1121,7 @@ aes129plus:
 	AESENC	X5, X5
 	AESENC	X6, X6
 	AESENC	X7, X7
-	
+
 	// start with last (possibly overlapping) block
 	MOVOU	-128(AX)(CX*1), X8
 	MOVOU	-112(AX)(CX*1), X9
@@ -1160,11 +1141,11 @@ aes129plus:
 	PXOR	X5, X13
 	PXOR	X6, X14
 	PXOR	X7, X15
-	
+
 	// compute number of remaining 128-byte blocks
 	DECQ	CX
 	SHRQ	$7, CX
-	
+
 aesloop:
 	// scramble state
 	AESENC	X8, X8
@@ -1233,7 +1214,8 @@ aesloop:
 	PXOR	X9, X8
 	MOVQ	X8, (DX)
 	RET
-	
+
+// func aeshash32(p unsafe.Pointer, h uintptr) uintptr
 TEXT runtime·aeshash32(SB),NOSPLIT,$0-24
 	MOVQ	p+0(FP), AX	// ptr to data
 	MOVQ	h+8(FP), X0	// seed
@@ -1244,6 +1226,7 @@ TEXT runtime·aeshash32(SB),NOSPLIT,$0-24
 	MOVQ	X0, ret+16(FP)
 	RET
 
+// func aeshash64(p unsafe.Pointer, h uintptr) uintptr
 TEXT runtime·aeshash64(SB),NOSPLIT,$0-24
 	MOVQ	p+0(FP), AX	// ptr to data
 	MOVQ	h+8(FP), X0	// seed
@@ -1289,6 +1272,7 @@ DATA masks<>+0xf0(SB)/8, $0xffffffffffffffff
 DATA masks<>+0xf8(SB)/8, $0x00ffffffffffffff
 GLOBL masks<>(SB),RODATA,$256
 
+// func checkASM() bool
 TEXT ·checkASM(SB),NOSPLIT,$0-1
 	// check that masks<>(SB) and shifts<>(SB) are aligned to 16-byte
 	MOVQ	$masks<>(SB), AX
@@ -1456,3 +1440,196 @@ flush:
 	MOVQ	88(SP), R12
 	MOVQ	96(SP), R15
 	JMP	ret
+
+DATA	debugCallFrameTooLarge<>+0x00(SB)/8, $"call fra"
+DATA	debugCallFrameTooLarge<>+0x08(SB)/8, $"me too l"
+DATA	debugCallFrameTooLarge<>+0x10(SB)/4, $"arge"
+GLOBL	debugCallFrameTooLarge<>(SB), RODATA, $0x14	// Size duplicated below
+
+// debugCallV1 is the entry point for debugger-injected function
+// calls on running goroutines. It informs the runtime that a
+// debug call has been injected and creates a call frame for the
+// debugger to fill in.
+//
+// To inject a function call, a debugger should:
+// 1. Check that the goroutine is in state _Grunning and that
+//    there are at least 256 bytes free on the stack.
+// 2. Push the current PC on the stack (updating SP).
+// 3. Write the desired argument frame size at SP-16 (using the SP
+//    after step 2).
+// 4. Save all machine registers (including flags and XMM reigsters)
+//    so they can be restored later by the debugger.
+// 5. Set the PC to debugCallV1 and resume execution.
+//
+// If the goroutine is in state _Grunnable, then it's not generally
+// safe to inject a call because it may return out via other runtime
+// operations. Instead, the debugger should unwind the stack to find
+// the return to non-runtime code, add a temporary breakpoint there,
+// and inject the call once that breakpoint is hit.
+//
+// If the goroutine is in any other state, it's not safe to inject a call.
+//
+// This function communicates back to the debugger by setting RAX and
+// invoking INT3 to raise a breakpoint signal. See the comments in the
+// implementation for the protocol the debugger is expected to
+// follow. InjectDebugCall in the runtime tests demonstrates this protocol.
+//
+// The debugger must ensure that any pointers passed to the function
+// obey escape analysis requirements. Specifically, it must not pass
+// a stack pointer to an escaping argument. debugCallV1 cannot check
+// this invariant.
+TEXT runtime·debugCallV1(SB),NOSPLIT,$152-0
+	// Save all registers that may contain pointers in GC register
+	// map order (see ssa.registersAMD64). This makes it possible
+	// to copy the stack while updating pointers currently held in
+	// registers, and for the GC to find roots in registers.
+	//
+	// We can't do anything that might clobber any of these
+	// registers before this.
+	MOVQ	R15, r15-(14*8+8)(SP)
+	MOVQ	R14, r14-(13*8+8)(SP)
+	MOVQ	R13, r13-(12*8+8)(SP)
+	MOVQ	R12, r12-(11*8+8)(SP)
+	MOVQ	R11, r11-(10*8+8)(SP)
+	MOVQ	R10, r10-(9*8+8)(SP)
+	MOVQ	R9, r9-(8*8+8)(SP)
+	MOVQ	R8, r8-(7*8+8)(SP)
+	MOVQ	DI, di-(6*8+8)(SP)
+	MOVQ	SI, si-(5*8+8)(SP)
+	MOVQ	BP, bp-(4*8+8)(SP)
+	MOVQ	BX, bx-(3*8+8)(SP)
+	MOVQ	DX, dx-(2*8+8)(SP)
+	// Save the frame size before we clobber it. Either of the last
+	// saves could clobber this depending on whether there's a saved BP.
+	MOVQ	frameSize-24(FP), DX	// aka -16(RSP) before prologue
+	MOVQ	CX, cx-(1*8+8)(SP)
+	MOVQ	AX, ax-(0*8+8)(SP)
+
+	// Save the argument frame size.
+	MOVQ	DX, frameSize-128(SP)
+
+	// Perform a safe-point check.
+	MOVQ	retpc-8(FP), AX	// Caller's PC
+	MOVQ	AX, 0(SP)
+	CALL	runtime·debugCallCheck(SB)
+	MOVQ	8(SP), AX
+	TESTQ	AX, AX
+	JZ	good
+	// The safety check failed. Put the reason string at the top
+	// of the stack.
+	MOVQ	AX, 0(SP)
+	MOVQ	16(SP), AX
+	MOVQ	AX, 8(SP)
+	// Set AX to 8 and invoke INT3. The debugger should get the
+	// reason a call can't be injected from the top of the stack
+	// and resume execution.
+	MOVQ	$8, AX
+	BYTE	$0xcc
+	JMP	restore
+
+good:
+	// Registers are saved and it's safe to make a call.
+	// Open up a call frame, moving the stack if necessary.
+	//
+	// Once the frame is allocated, this will set AX to 0 and
+	// invoke INT3. The debugger should write the argument
+	// frame for the call at SP, push the trapping PC on the
+	// stack, set the PC to the function to call, set RCX to point
+	// to the closure (if a closure call), and resume execution.
+	//
+	// If the function returns, this will set AX to 1 and invoke
+	// INT3. The debugger can then inspect any return value saved
+	// on the stack at SP and resume execution again.
+	//
+	// If the function panics, this will set AX to 2 and invoke INT3.
+	// The interface{} value of the panic will be at SP. The debugger
+	// can inspect the panic value and resume execution again.
+#define DEBUG_CALL_DISPATCH(NAME,MAXSIZE)	\
+	CMPQ	AX, $MAXSIZE;			\
+	JA	5(PC);				\
+	MOVQ	$NAME(SB), AX;			\
+	MOVQ	AX, 0(SP);			\
+	CALL	runtime·debugCallWrap(SB);	\
+	JMP	restore
+
+	MOVQ	frameSize-128(SP), AX
+	DEBUG_CALL_DISPATCH(debugCall32<>, 32)
+	DEBUG_CALL_DISPATCH(debugCall64<>, 64)
+	DEBUG_CALL_DISPATCH(debugCall128<>, 128)
+	DEBUG_CALL_DISPATCH(debugCall256<>, 256)
+	DEBUG_CALL_DISPATCH(debugCall512<>, 512)
+	DEBUG_CALL_DISPATCH(debugCall1024<>, 1024)
+	DEBUG_CALL_DISPATCH(debugCall2048<>, 2048)
+	DEBUG_CALL_DISPATCH(debugCall4096<>, 4096)
+	DEBUG_CALL_DISPATCH(debugCall8192<>, 8192)
+	DEBUG_CALL_DISPATCH(debugCall16384<>, 16384)
+	DEBUG_CALL_DISPATCH(debugCall32768<>, 32768)
+	DEBUG_CALL_DISPATCH(debugCall65536<>, 65536)
+	// The frame size is too large. Report the error.
+	MOVQ	$debugCallFrameTooLarge<>(SB), AX
+	MOVQ	AX, 0(SP)
+	MOVQ	$0x14, 8(SP)
+	MOVQ	$8, AX
+	BYTE	$0xcc
+	JMP	restore
+
+restore:
+	// Calls and failures resume here.
+	//
+	// Set AX to 16 and invoke INT3. The debugger should restore
+	// all registers except RIP and RSP and resume execution.
+	MOVQ	$16, AX
+	BYTE	$0xcc
+	// We must not modify flags after this point.
+
+	// Restore pointer-containing registers, which may have been
+	// modified from the debugger's copy by stack copying.
+	MOVQ	ax-(0*8+8)(SP), AX
+	MOVQ	cx-(1*8+8)(SP), CX
+	MOVQ	dx-(2*8+8)(SP), DX
+	MOVQ	bx-(3*8+8)(SP), BX
+	MOVQ	bp-(4*8+8)(SP), BP
+	MOVQ	si-(5*8+8)(SP), SI
+	MOVQ	di-(6*8+8)(SP), DI
+	MOVQ	r8-(7*8+8)(SP), R8
+	MOVQ	r9-(8*8+8)(SP), R9
+	MOVQ	r10-(9*8+8)(SP), R10
+	MOVQ	r11-(10*8+8)(SP), R11
+	MOVQ	r12-(11*8+8)(SP), R12
+	MOVQ	r13-(12*8+8)(SP), R13
+	MOVQ	r14-(13*8+8)(SP), R14
+	MOVQ	r15-(14*8+8)(SP), R15
+
+	RET
+
+#define DEBUG_CALL_FN(NAME,MAXSIZE)		\
+TEXT NAME(SB),WRAPPER,$MAXSIZE-0;		\
+	NO_LOCAL_POINTERS;			\
+	MOVQ	$0, AX;				\
+	BYTE	$0xcc;				\
+	MOVQ	$1, AX;				\
+	BYTE	$0xcc;				\
+	RET
+DEBUG_CALL_FN(debugCall32<>, 32)
+DEBUG_CALL_FN(debugCall64<>, 64)
+DEBUG_CALL_FN(debugCall128<>, 128)
+DEBUG_CALL_FN(debugCall256<>, 256)
+DEBUG_CALL_FN(debugCall512<>, 512)
+DEBUG_CALL_FN(debugCall1024<>, 1024)
+DEBUG_CALL_FN(debugCall2048<>, 2048)
+DEBUG_CALL_FN(debugCall4096<>, 4096)
+DEBUG_CALL_FN(debugCall8192<>, 8192)
+DEBUG_CALL_FN(debugCall16384<>, 16384)
+DEBUG_CALL_FN(debugCall32768<>, 32768)
+DEBUG_CALL_FN(debugCall65536<>, 65536)
+
+// func debugCallPanicked(val interface{})
+TEXT runtime·debugCallPanicked(SB),NOSPLIT,$16-16
+	// Copy the panic value to the top of stack.
+	MOVQ	val_type+0(FP), AX
+	MOVQ	AX, 0(SP)
+	MOVQ	val_data+8(FP), AX
+	MOVQ	AX, 8(SP)
+	MOVQ	$2, AX
+	BYTE	$0xcc
+	RET

@@ -28,6 +28,12 @@
 // For commands, unless the -cmd flag is present "go doc command"
 // shows only the package-level docs for the package.
 //
+// The -src flag causes doc to print the full source code for the symbol, such
+// as the body of a struct, function or method.
+//
+// The -all flag causes doc to print all documentation for the package and
+// all its visible symbols. The argument must identify a package.
+//
 // For complete documentation, run "go help doc".
 package main
 
@@ -39,6 +45,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -48,7 +55,9 @@ import (
 var (
 	unexported bool // -u flag
 	matchCase  bool // -c flag
+	showAll    bool // -all flag
 	showCmd    bool // -cmd flag
+	showSrc    bool // -src flag
 )
 
 // usage is a replacement usage function for the flags package.
@@ -83,7 +92,9 @@ func do(writer io.Writer, flagSet *flag.FlagSet, args []string) (err error) {
 	matchCase = false
 	flagSet.BoolVar(&unexported, "u", false, "show unexported symbols as well as exported")
 	flagSet.BoolVar(&matchCase, "c", false, "symbol matching honors case (paths not affected)")
+	flagSet.BoolVar(&showAll, "all", false, "show all documentation for package")
 	flagSet.BoolVar(&showCmd, "cmd", false, "show symbols with package docs even if package is a command")
+	flagSet.BoolVar(&showSrc, "src", false, "show source code for symbol")
 	flagSet.Parse(args)
 	var paths []string
 	var symbol, method string
@@ -119,6 +130,15 @@ func do(writer io.Writer, flagSet *flag.FlagSet, args []string) (err error) {
 		// case but we want to see them, always.
 		if pkg.build.ImportPath == "builtin" {
 			unexported = true
+		}
+
+		// We have a package.
+		if showAll {
+			if symbol != "" {
+				return fmt.Errorf("-all valid only for package, not symbol: %s", symbol)
+			}
+			pkg.allDoc()
+			return
 		}
 
 		switch {
@@ -189,11 +209,20 @@ func parseArgs(args []string) (pkg *build.Package, path, symbol string, more boo
 		// Done below.
 	case 2:
 		// Package must be findable and importable.
-		packagePath, ok := findPackage(arg)
-		if !ok {
-			return nil, args[0], args[1], false
+		pkg, err := build.Import(args[0], "", build.ImportComment)
+		if err == nil {
+			return pkg, args[0], args[1], false
 		}
-		return importDir(packagePath), arg, args[1], true
+		for {
+			packagePath, ok := findNextPackage(arg)
+			if !ok {
+				break
+			}
+			if pkg, err := build.ImportDir(packagePath, build.ImportComment); err == nil {
+				return pkg, arg, args[1], true
+			}
+		}
+		return nil, args[0], args[1], false
 	}
 	// Usual case: one argument.
 	// If it contains slashes, it begins with a package path.
@@ -241,9 +270,15 @@ func parseArgs(args []string) (pkg *build.Package, path, symbol string, more boo
 		}
 		// See if we have the basename or tail of a package, as in json for encoding/json
 		// or ivy/value for robpike.io/ivy/value.
-		path, ok := findPackage(arg[0:period])
-		if ok {
-			return importDir(path), arg[0:period], symbol, true
+		pkgName := arg[:period]
+		for {
+			path, ok := findNextPackage(pkgName)
+			if !ok {
+				break
+			}
+			if pkg, err = build.ImportDir(path, build.ImportComment); err == nil {
+				return pkg, arg[0:period], symbol, true
+			}
 		}
 		dirs.Reset() // Next iteration of for loop must scan all the directories again.
 	}
@@ -338,20 +373,28 @@ func isUpper(name string) bool {
 	return unicode.IsUpper(ch)
 }
 
-// findPackage returns the full file name path that first matches the
+// findNextPackage returns the next full file name path that matches the
 // (perhaps partial) package path pkg. The boolean reports if any match was found.
-func findPackage(pkg string) (string, bool) {
+func findNextPackage(pkg string) (string, bool) {
 	if pkg == "" || isUpper(pkg) { // Upper case symbol cannot be a package name.
 		return "", false
 	}
-	pkgString := filepath.Clean(string(filepath.Separator) + pkg)
+	if filepath.IsAbs(pkg) {
+		if dirs.offset == 0 {
+			dirs.offset = -1
+			return pkg, true
+		}
+		return "", false
+	}
+	pkg = path.Clean(pkg)
+	pkgSuffix := "/" + pkg
 	for {
-		path, ok := dirs.Next()
+		d, ok := dirs.Next()
 		if !ok {
 			return "", false
 		}
-		if strings.HasSuffix(path, pkgString) {
-			return path, true
+		if d.importPath == pkg || strings.HasSuffix(d.importPath, pkgSuffix) {
+			return d.dir, true
 		}
 	}
 }

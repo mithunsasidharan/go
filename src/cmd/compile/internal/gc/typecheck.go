@@ -37,7 +37,12 @@ func resolve(n *Node) *Node {
 	}
 
 	if n.Sym.Pkg != localpkg {
+		if inimport {
+			Fatalf("recursive inimport")
+		}
+		inimport = true
 		expandDecl(n)
+		inimport = false
 		return n
 	}
 
@@ -82,8 +87,7 @@ var _typekind = []string{
 	TFLOAT64:    "float64",
 	TBOOL:       "bool",
 	TSTRING:     "string",
-	TPTR32:      "pointer",
-	TPTR64:      "pointer",
+	TPTR:        "pointer",
 	TUNSAFEPTR:  "unsafe.Pointer",
 	TSTRUCT:     "struct",
 	TINTER:      "interface",
@@ -110,19 +114,35 @@ func typekind(t *types.Type) string {
 	return fmt.Sprintf("etype=%d", et)
 }
 
-// sprint_depchain prints a dependency chain of nodes into trace.
-// It is used by typecheck in the case of OLITERAL nodes
-// to print constant definition loops.
-func sprint_depchain(trace *string, stack []*Node, cur *Node, first *Node) {
-	for i := len(stack) - 1; i >= 0; i-- {
-		if n := stack[i]; n.Op == cur.Op {
-			if n != first {
-				sprint_depchain(trace, stack[:i], n, first)
-			}
-			*trace += fmt.Sprintf("\n\t%v: %v uses %v", n.Line(), n, cur)
-			return
+func cycleFor(start *Node) []*Node {
+	// Find the start node in typecheck_tcstack.
+	// We know that it must exist because each time we mark
+	// a node with n.SetTypecheck(2) we push it on the stack,
+	// and each time we mark a node with n.SetTypecheck(2) we
+	// pop it from the stack. We hit a cycle when we encounter
+	// a node marked 2 in which case is must be on the stack.
+	i := len(typecheck_tcstack) - 1
+	for i > 0 && typecheck_tcstack[i] != start {
+		i--
+	}
+
+	// collect all nodes with same Op
+	var cycle []*Node
+	for _, n := range typecheck_tcstack[i:] {
+		if n.Op == start.Op {
+			cycle = append(cycle, n)
 		}
 	}
+
+	return cycle
+}
+
+func cycleTrace(cycle []*Node) string {
+	var s string
+	for i, n := range cycle {
+		s += fmt.Sprintf("\n\t%v: %v uses %v", n.Line(), n, cycle[(i+1)%len(cycle)])
+	}
+	return s
 }
 
 var typecheck_tcstack []*Node
@@ -174,10 +194,20 @@ func typecheck(n *Node, top int) *Node {
 			}
 
 		case OTYPE:
+			// Only report a type cycle if we are expecting a type.
+			// Otherwise let other code report an error.
 			if top&Etype == Etype {
-				var trace string
-				sprint_depchain(&trace, typecheck_tcstack, n, n)
-				yyerrorl(n.Pos, "invalid recursive type alias %v%s", n, trace)
+				// A cycle containing only alias types is an error
+				// since it would expand indefinitely when aliases
+				// are substituted.
+				cycle := cycleFor(n)
+				for _, n := range cycle {
+					if n.Name != nil && !n.Name.Param.Alias {
+						lineno = lno
+						return n
+					}
+				}
+				yyerrorl(n.Pos, "invalid recursive type alias %v%s", n, cycleTrace(cycle))
 			}
 
 		case OLITERAL:
@@ -185,9 +215,7 @@ func typecheck(n *Node, top int) *Node {
 				yyerror("%v is not a type", n)
 				break
 			}
-			var trace string
-			sprint_depchain(&trace, typecheck_tcstack, n, n)
-			yyerrorl(n.Pos, "constant definition loop%s", trace)
+			yyerrorl(n.Pos, "constant definition loop%s", cycleTrace(cycleFor(n)))
 		}
 
 		if nsavederrors+nerrors == 0 {
@@ -268,21 +296,21 @@ func indexlit(n *Node) *Node {
 // 	n.Left = typecheck1(n.Left, top)
 func typecheck1(n *Node, top int) *Node {
 	switch n.Op {
-	case OXDOT, ODOT, ODOTPTR, ODOTMETH, ODOTINTER, ORETJMP:
-		// n.Sym is a field/method name, not a variable.
-	default:
-		if n.Sym != nil {
-			if n.Op == ONAME && n.SubOp() != 0 && top&Ecall == 0 {
-				yyerror("use of builtin %v not in function call", n.Sym)
-				n.Type = nil
-				return n
-			}
+	case OLITERAL, ONAME, ONONAME, OTYPE:
+		if n.Sym == nil {
+			break
+		}
 
-			typecheckdef(n)
-			if n.Op == ONONAME {
-				n.Type = nil
-				return n
-			}
+		if n.Op == ONAME && n.SubOp() != 0 && top&Ecall == 0 {
+			yyerror("use of builtin %v not in function call", n.Sym)
+			n.Type = nil
+			return n
+		}
+
+		typecheckdef(n)
+		if n.Op == ONONAME {
+			n.Type = nil
+			return n
 		}
 	}
 
@@ -719,43 +747,22 @@ func typecheck1(n *Node, top int) *Node {
 			}
 		}
 
-		if et == TSTRING {
-			if iscmp[n.Op] {
-				ot := n.Op
-				n.Op = OCMPSTR
-				n.SetSubOp(ot)
-			} else if n.Op == OADD {
-				// create OADDSTR node with list of strings in x + y + z + (w + v) + ...
-				n.Op = OADDSTR
+		if et == TSTRING && n.Op == OADD {
+			// create OADDSTR node with list of strings in x + y + z + (w + v) + ...
+			n.Op = OADDSTR
 
-				if l.Op == OADDSTR {
-					n.List.Set(l.List.Slice())
-				} else {
-					n.List.Set1(l)
-				}
-				if r.Op == OADDSTR {
-					n.List.AppendNodes(&r.List)
-				} else {
-					n.List.Append(r)
-				}
-				n.Left = nil
-				n.Right = nil
+			if l.Op == OADDSTR {
+				n.List.Set(l.List.Slice())
+			} else {
+				n.List.Set1(l)
 			}
-		}
-
-		if et == TINTER {
-			if l.Op == OLITERAL && l.Val().Ctype() == CTNIL {
-				// swap for back end
-				n.Left = r
-
-				n.Right = l
-			} else if r.Op == OLITERAL && r.Val().Ctype() == CTNIL {
-			} else // leave alone for back end
-			if r.Type.IsInterface() == l.Type.IsInterface() {
-				ot := n.Op
-				n.Op = OCMPIFACE
-				n.SetSubOp(ot)
+			if r.Op == OADDSTR {
+				n.List.AppendNodes(&r.List)
+			} else {
+				n.List.Append(r)
 			}
+			n.Left = nil
+			n.Right = nil
 		}
 
 		if (op == ODIV || op == OMOD) && Isconst(r, CTINT) {
@@ -895,7 +902,7 @@ func typecheck1(n *Node, top int) *Node {
 				yyerror("%v undefined (cannot refer to unexported field or method %v)", n, n.Sym)
 
 			default:
-				if mt := lookdot(n, t, 2); mt != nil { // Case-insensitive lookup.
+				if mt := lookdot(n, t, 2); mt != nil && visible(mt.Sym) { // Case-insensitive lookup.
 					yyerror("%v undefined (type %v has no field or method %v, but does have %v)", n, n.Left.Type, n.Sym, mt.Sym)
 				} else {
 					yyerror("%v undefined (type %v has no field or method %v)", n, n.Left.Type, n.Sym)
@@ -1234,7 +1241,7 @@ func typecheck1(n *Node, top int) *Node {
 			n.Op = OCALLFUNC
 			if t.Etype != TFUNC {
 				name := l.String()
-				if isBuiltinFuncName(name) {
+				if isBuiltinFuncName(name) && l.Name.Defn != nil {
 					// be more specific when the function
 					// name matches a predeclared function
 					yyerror("cannot call non-function %s (type %v), declared at %s",
@@ -2010,6 +2017,9 @@ func typecheck1(n *Node, top int) *Node {
 			}
 		}
 		n.Right = typecheck(n.Right, Etop)
+		if n.Op == OFORUNTIL {
+			typecheckslice(n.List.Slice(), Etop)
+		}
 		typecheckslice(n.Nbody.Slice(), Etop)
 		decldepth--
 
@@ -2100,10 +2110,6 @@ func typecheck1(n *Node, top int) *Node {
 		default:
 			checkwidth(t)
 		}
-	}
-
-	if safemode && !inimport && !compiling_wrappers && t != nil && t.Etype == TUNSAFEPTR {
-		yyerror("cannot use unsafe.Pointer")
 	}
 
 	evconst(n)
@@ -2404,7 +2410,7 @@ func isMethodApplicable(t *types.Type, m *types.Field) bool {
 }
 
 func derefall(t *types.Type) *types.Type {
-	for t != nil && t.Etype == types.Tptr {
+	for t != nil && t.IsPtr() {
 		t = t.Elem()
 	}
 	return t
@@ -2474,20 +2480,20 @@ func lookdot(n *Node, t *types.Type, dostrcmp int) *types.Field {
 		dowidth(tt)
 		rcvr := f2.Type.Recv().Type
 		if !eqtype(rcvr, tt) {
-			if rcvr.Etype == types.Tptr && eqtype(rcvr.Elem(), tt) {
+			if rcvr.IsPtr() && eqtype(rcvr.Elem(), tt) {
 				checklvalue(n.Left, "call pointer method on")
 				n.Left = nod(OADDR, n.Left, nil)
 				n.Left.SetImplicit(true)
 				n.Left = typecheck(n.Left, Etype|Erv)
-			} else if tt.Etype == types.Tptr && rcvr.Etype != types.Tptr && eqtype(tt.Elem(), rcvr) {
+			} else if tt.IsPtr() && !rcvr.IsPtr() && eqtype(tt.Elem(), rcvr) {
 				n.Left = nod(OIND, n.Left, nil)
 				n.Left.SetImplicit(true)
 				n.Left = typecheck(n.Left, Etype|Erv)
-			} else if tt.Etype == types.Tptr && tt.Elem().Etype == types.Tptr && eqtype(derefall(tt), derefall(rcvr)) {
+			} else if tt.IsPtr() && tt.Elem().IsPtr() && eqtype(derefall(tt), derefall(rcvr)) {
 				yyerror("calling method %v with receiver %L requires explicit dereference", n.Sym, n.Left)
-				for tt.Etype == types.Tptr {
+				for tt.IsPtr() {
 					// Stop one level early for method with pointer receiver.
-					if rcvr.Etype == types.Tptr && tt.Elem().Etype != types.Tptr {
+					if rcvr.IsPtr() && !tt.Elem().IsPtr() {
 						break
 					}
 					n.Left = nod(OIND, n.Left, nil)
@@ -3105,7 +3111,11 @@ func typecheckcomplit(n *Node) *Node {
 				f := lookdot1(nil, l.Sym, t, t.Fields(), 0)
 				if f == nil {
 					if ci := lookdot1(nil, l.Sym, t, t.Fields(), 2); ci != nil { // Case-insensitive lookup.
-						yyerror("unknown field '%v' in struct literal of type %v (but does have %v)", l.Sym, t, ci.Sym)
+						if visible(ci.Sym) {
+							yyerror("unknown field '%v' in struct literal of type %v (but does have %v)", l.Sym, t, ci.Sym)
+						} else {
+							yyerror("unknown field '%v' in struct literal of type %v", l.Sym, t)
+						}
 						continue
 					}
 					p, _ := dotpath(l.Sym, t, nil, true)
@@ -3116,7 +3126,7 @@ func typecheckcomplit(n *Node) *Node {
 					// dotpath returns the parent embedded types in reverse order.
 					var ep []string
 					for ei := len(p) - 1; ei >= 0; ei-- {
-						ep = append(ep, p[ei].field.Type.Sym.Name)
+						ep = append(ep, p[ei].field.Sym.Name)
 					}
 					ep = append(ep, l.Sym.Name)
 					yyerror("cannot use promoted field %v in struct literal of type %v", strings.Join(ep, "."), t)
@@ -3150,6 +3160,11 @@ func typecheckcomplit(n *Node) *Node {
 
 	n.Orig = norig
 	return n
+}
+
+// visible reports whether sym is exported or locally defined.
+func visible(sym *types.Sym) bool {
+	return sym != nil && (types.IsExported(sym.Name) || sym.Pkg == localpkg)
 }
 
 // lvalue etc
@@ -3257,7 +3272,8 @@ func samesafeexpr(l *Node, r *Node) bool {
 	case ODOT, ODOTPTR:
 		return l.Sym != nil && r.Sym != nil && l.Sym == r.Sym && samesafeexpr(l.Left, r.Left)
 
-	case OIND, OCONVNOP:
+	case OIND, OCONVNOP,
+		ONOT, OCOM, OPLUS, OMINUS:
 		return samesafeexpr(l.Left, r.Left)
 
 	case OCONV:
@@ -3265,7 +3281,8 @@ func samesafeexpr(l *Node, r *Node) bool {
 		// Allow only numeric-ish types. This is a bit conservative.
 		return issimple[l.Type.Etype] && samesafeexpr(l.Left, r.Left)
 
-	case OINDEX, OINDEXMAP:
+	case OINDEX, OINDEXMAP,
+		OADD, OSUB, OOR, OXOR, OMUL, OLSH, ORSH, OAND, OANDNOT, ODIV, OMOD:
 		return samesafeexpr(l.Left, r.Left) && samesafeexpr(l.Right, r.Right)
 
 	case OLITERAL:
@@ -3292,10 +3309,17 @@ func typecheckas(n *Node) {
 		n.Left = typecheck(n.Left, Erv|Easgn)
 	}
 
-	n.Right = typecheck(n.Right, Erv)
+	// Use Efnstruct so we can emit an "N variables but M values" error
+	// to be consistent with typecheckas2 (#26616).
+	n.Right = typecheck(n.Right, Erv|Efnstruct)
 	checkassign(n, n.Left)
 	if n.Right != nil && n.Right.Type != nil {
-		if n.Left.Type != nil {
+		if n.Right.Type.IsFuncArgStruct() {
+			yyerror("assignment mismatch: 1 variable but %v returns %d values", n.Right.Left, n.Right.Type.NumFields())
+			// Multi-value RHS isn't actually valid for OAS; nil out
+			// to indicate failed typechecking.
+			n.Right.Type = nil
+		} else if n.Left.Type != nil {
 			n.Right = assignconv(n.Right, n.Left.Type, "assignment")
 		}
 	}
@@ -3436,7 +3460,12 @@ func typecheckas2(n *Node) {
 	}
 
 mismatch:
-	yyerror("assignment mismatch: %d variables but %d values", cl, cr)
+	switch r.Op {
+	default:
+		yyerror("assignment mismatch: %d variable but %d values", cl, cr)
+	case OCALLFUNC, OCALLMETH, OCALLINTER:
+		yyerror("assignment mismatch: %d variables but %v returns %d values", cl, r.Left, cr)
+	}
 
 	// second half of dance
 out:
@@ -3567,21 +3596,14 @@ func copytype(n *Node, t *types.Type) {
 	}
 
 	// Double-check use of type as embedded type.
-	lno := lineno
-
 	if embedlineno.IsKnown() {
-		lineno = embedlineno
 		if t.IsPtr() || t.IsUnsafePtr() {
-			yyerror("embedded type cannot be a pointer")
+			yyerrorl(embedlineno, "embedded type cannot be a pointer")
 		}
 	}
-
-	lineno = lno
 }
 
 func typecheckdeftype(n *Node) {
-	lno := lineno
-	setlineno(n)
 	n.Type.Sym = n.Sym
 	n.SetTypecheck(1)
 	n.Name.Param.Ntype = typecheck(n.Name.Param.Ntype, Etype)
@@ -3596,30 +3618,25 @@ func typecheckdeftype(n *Node) {
 		// that don't come along.
 		copytype(n, t)
 	}
-
-	lineno = lno
 }
 
 func typecheckdef(n *Node) {
-	lno := lineno
-	setlineno(n)
+	lno := setlineno(n)
 
 	if n.Op == ONONAME {
 		if !n.Diag() {
 			n.SetDiag(true)
-			if n.Pos.IsKnown() {
-				lineno = n.Pos
-			}
 
 			// Note: adderrorname looks for this string and
 			// adds context about the outer expression
-			yyerror("undefined: %v", n.Sym)
+			yyerrorl(lineno, "undefined: %v", n.Sym)
 		}
-
+		lineno = lno
 		return
 	}
 
 	if n.Walkdef() == 1 {
+		lineno = lno
 		return
 	}
 
@@ -3645,9 +3662,6 @@ func typecheckdef(n *Node) {
 	default:
 		Fatalf("typecheckdef %v", n.Op)
 
-	case OGOTO, OLABEL, OPACK:
-		// nothing to do here
-
 	case OLITERAL:
 		if n.Name.Param.Ntype != nil {
 			n.Name.Param.Ntype = typecheck(n.Name.Param.Ntype, Etype)
@@ -3662,20 +3676,19 @@ func typecheckdef(n *Node) {
 		e := n.Name.Defn
 		n.Name.Defn = nil
 		if e == nil {
-			lineno = n.Pos
 			Dump("typecheckdef nil defn", n)
-			yyerror("xxx")
+			yyerrorl(n.Pos, "xxx")
 		}
 
 		e = typecheck(e, Erv)
 		if Isconst(e, CTNIL) {
-			yyerror("const initializer cannot be nil")
+			yyerrorl(n.Pos, "const initializer cannot be nil")
 			goto ret
 		}
 
 		if e.Type != nil && e.Op != OLITERAL || !e.isGoConst() {
 			if !e.Diag() {
-				yyerror("const initializer %v is not a constant", e)
+				yyerrorl(n.Pos, "const initializer %v is not a constant", e)
 				e.SetDiag(true)
 			}
 
@@ -3685,12 +3698,12 @@ func typecheckdef(n *Node) {
 		t := n.Type
 		if t != nil {
 			if !okforconst[t.Etype] {
-				yyerror("invalid constant type %v", t)
+				yyerrorl(n.Pos, "invalid constant type %v", t)
 				goto ret
 			}
 
 			if !e.Type.IsUntyped() && !eqtype(t, e.Type) {
-				yyerror("cannot use %L as type %v in const initializer", e, t)
+				yyerrorl(n.Pos, "cannot use %L as type %v in const initializer", e, t)
 				goto ret
 			}
 
