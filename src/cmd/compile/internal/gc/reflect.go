@@ -320,7 +320,12 @@ func hiter(t *types.Type) *types.Type {
 // f is method type, with receiver.
 // return function type, receiver as first argument (or not).
 func methodfunc(f *types.Type, receiver *types.Type) *types.Type {
-	var in []*Node
+	inLen := f.Params().Fields().Len()
+	if receiver != nil {
+		inLen++
+	}
+	in := make([]*Node, 0, inLen)
+
 	if receiver != nil {
 		d := anonfield(receiver)
 		in = append(in, d)
@@ -328,11 +333,12 @@ func methodfunc(f *types.Type, receiver *types.Type) *types.Type {
 
 	for _, t := range f.Params().Fields().Slice() {
 		d := anonfield(t.Type)
-		d.SetIsddd(t.Isddd())
+		d.SetIsDDD(t.IsDDD())
 		in = append(in, d)
 	}
 
-	var out []*Node
+	outLen := f.Results().Fields().Len()
+	out := make([]*Node, 0, outLen)
 	for _, t := range f.Results().Fields().Slice() {
 		d := anonfield(t.Type)
 		out = append(out, d)
@@ -405,19 +411,15 @@ func methods(t *types.Type) []*Sig {
 
 		if !sig.isym.Siggen() {
 			sig.isym.SetSiggen(true)
-			if !eqtype(this, it) {
-				compiling_wrappers = true
+			if !types.Identical(this, it) {
 				genwrapper(it, f, sig.isym)
-				compiling_wrappers = false
 			}
 		}
 
 		if !sig.tsym.Siggen() {
 			sig.tsym.SetSiggen(true)
-			if !eqtype(this, t) {
-				compiling_wrappers = true
+			if !types.Identical(this, t) {
 				genwrapper(t, f, sig.tsym)
-				compiling_wrappers = false
 			}
 		}
 	}
@@ -799,7 +801,7 @@ var (
 func dcommontype(lsym *obj.LSym, t *types.Type) int {
 	sizeofAlg := 2 * Widthptr
 	if algarray == nil {
-		algarray = sysfunc("algarray")
+		algarray = sysvar("algarray")
 	}
 	dowidth(t)
 	alg := algtype(t)
@@ -810,7 +812,7 @@ func dcommontype(lsym *obj.LSym, t *types.Type) int {
 
 	sptrWeak := true
 	var sptr *obj.LSym
-	if !t.IsPtr() || t.PtrBase != nil {
+	if !t.IsPtr() || t.IsPtrElem() {
 		tptr := types.NewPtr(t)
 		if t.Sym != nil || methods(tptr) != nil {
 			sptrWeak = false
@@ -913,7 +915,7 @@ func dcommontype(lsym *obj.LSym, t *types.Type) int {
 	return ot
 }
 
-// typeHasNoAlg returns whether t does not have any associated hash/eq
+// typeHasNoAlg reports whether t does not have any associated hash/eq
 // algorithms because t, or some component of t, is marked Noalg.
 func typeHasNoAlg(t *types.Type) bool {
 	a, bad := algtype1(t)
@@ -1135,7 +1137,7 @@ func dtypesym(t *types.Type) *obj.LSym {
 			return lsym
 		}
 		// TODO(mdempsky): Investigate whether this can happen.
-		if isforw[tbase.Etype] {
+		if tbase.Etype == TFORW {
 			return lsym
 		}
 	}
@@ -1178,7 +1180,7 @@ func dtypesym(t *types.Type) *obj.LSym {
 		}
 		isddd := false
 		for _, t1 := range t.Params().Fields().Slice() {
-			isddd = t1.Isddd()
+			isddd = t1.IsDDD()
 			dtypesym(t1.Type)
 		}
 		for _, t1 := range t.Results().Fields().Slice() {
@@ -1616,7 +1618,7 @@ func dalgsym(t *types.Type) *obj.LSym {
 
 		if memhashvarlen == nil {
 			memhashvarlen = sysfunc("memhash_varlen")
-			memequalvarlen = sysfunc("memequal_varlen")
+			memequalvarlen = sysvar("memequal_varlen") // asm func
 		}
 
 		// make hash closure

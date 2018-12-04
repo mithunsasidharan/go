@@ -107,16 +107,18 @@ func init() {
 
 	// Common regInfo
 	var (
-		gp01      = regInfo{inputs: nil, outputs: gponly}
-		gp11      = regInfo{inputs: []regMask{gp}, outputs: gponly}
-		gp11sp    = regInfo{inputs: []regMask{gpsp}, outputs: gponly}
-		gp11sb    = regInfo{inputs: []regMask{gpspsb}, outputs: gponly}
-		gp21      = regInfo{inputs: []regMask{gp, gp}, outputs: gponly}
-		gp21sp    = regInfo{inputs: []regMask{gpsp, gp}, outputs: gponly}
-		gp21sb    = regInfo{inputs: []regMask{gpspsb, gpsp}, outputs: gponly}
-		gp21shift = regInfo{inputs: []regMask{gp, cx}, outputs: []regMask{gp}}
-		gp11div   = regInfo{inputs: []regMask{ax, gpsp &^ dx}, outputs: []regMask{ax, dx}}
-		gp21hmul  = regInfo{inputs: []regMask{ax, gpsp}, outputs: []regMask{dx}, clobbers: ax}
+		gp01           = regInfo{inputs: nil, outputs: gponly}
+		gp11           = regInfo{inputs: []regMask{gp}, outputs: gponly}
+		gp11sp         = regInfo{inputs: []regMask{gpsp}, outputs: gponly}
+		gp11sb         = regInfo{inputs: []regMask{gpspsb}, outputs: gponly}
+		gp21           = regInfo{inputs: []regMask{gp, gp}, outputs: gponly}
+		gp21sp         = regInfo{inputs: []regMask{gpsp, gp}, outputs: gponly}
+		gp21sb         = regInfo{inputs: []regMask{gpspsb, gpsp}, outputs: gponly}
+		gp21shift      = regInfo{inputs: []regMask{gp, cx}, outputs: []regMask{gp}}
+		gp11div        = regInfo{inputs: []regMask{ax, gpsp &^ dx}, outputs: []regMask{ax, dx}}
+		gp21hmul       = regInfo{inputs: []regMask{ax, gpsp}, outputs: []regMask{dx}, clobbers: ax}
+		gp21flags      = regInfo{inputs: []regMask{gp, gp}, outputs: []regMask{gp, 0}}
+		gp2flags1flags = regInfo{inputs: []regMask{gp, gp, 0}, outputs: []regMask{gp, 0}}
 
 		gp2flags     = regInfo{inputs: []regMask{gpsp, gpsp}}
 		gp1flags     = regInfo{inputs: []regMask{gpsp}}
@@ -124,7 +126,8 @@ func init() {
 		gp1flagsLoad = regInfo{inputs: []regMask{gpspsb, gpsp, 0}}
 		flagsgp      = regInfo{inputs: nil, outputs: gponly}
 
-		gp11flags = regInfo{inputs: []regMask{gp}, outputs: []regMask{gp, 0}}
+		gp11flags      = regInfo{inputs: []regMask{gp}, outputs: []regMask{gp, 0}}
+		gp1flags1flags = regInfo{inputs: []regMask{gp, 0}, outputs: []regMask{gp, 0}}
 
 		readflags = regInfo{inputs: nil, outputs: gponly}
 		flagsgpax = regInfo{inputs: nil, clobbers: ax, outputs: []regMask{gp &^ ax}}
@@ -220,12 +223,29 @@ func init() {
 
 		{name: "AVGQU", argLength: 2, reg: gp21, commutative: true, resultInArg0: true, clobberFlags: true}, // (arg0 + arg1) / 2 as unsigned, all 64 result bits
 
-		{name: "DIVQ", argLength: 2, reg: gp11div, typ: "(Int64,Int64)", asm: "IDIVQ", clobberFlags: true},   // [arg0 / arg1, arg0 % arg1]
-		{name: "DIVL", argLength: 2, reg: gp11div, typ: "(Int32,Int32)", asm: "IDIVL", clobberFlags: true},   // [arg0 / arg1, arg0 % arg1]
-		{name: "DIVW", argLength: 2, reg: gp11div, typ: "(Int16,Int16)", asm: "IDIVW", clobberFlags: true},   // [arg0 / arg1, arg0 % arg1]
+		// For DIVQ, DIVL and DIVW, AuxInt non-zero means that the divisor has been proved to be not -1.
+		{name: "DIVQ", argLength: 2, reg: gp11div, typ: "(Int64,Int64)", asm: "IDIVQ", aux: "Bool", clobberFlags: true}, // [arg0 / arg1, arg0 % arg1]
+		{name: "DIVL", argLength: 2, reg: gp11div, typ: "(Int32,Int32)", asm: "IDIVL", aux: "Bool", clobberFlags: true}, // [arg0 / arg1, arg0 % arg1]
+		{name: "DIVW", argLength: 2, reg: gp11div, typ: "(Int16,Int16)", asm: "IDIVW", aux: "Bool", clobberFlags: true}, // [arg0 / arg1, arg0 % arg1]
+
 		{name: "DIVQU", argLength: 2, reg: gp11div, typ: "(UInt64,UInt64)", asm: "DIVQ", clobberFlags: true}, // [arg0 / arg1, arg0 % arg1]
 		{name: "DIVLU", argLength: 2, reg: gp11div, typ: "(UInt32,UInt32)", asm: "DIVL", clobberFlags: true}, // [arg0 / arg1, arg0 % arg1]
 		{name: "DIVWU", argLength: 2, reg: gp11div, typ: "(UInt16,UInt16)", asm: "DIVW", clobberFlags: true}, // [arg0 / arg1, arg0 % arg1]
+
+		{name: "NEGLflags", argLength: 1, reg: gp11flags, typ: "(UInt32,Flags)", asm: "NEGL", resultInArg0: true}, // -arg0, flags set for 0-arg0.
+		// The following 4 add opcodes return the low 64 bits of the sum in the first result and
+		// the carry (the 65th bit) in the carry flag.
+		{name: "ADDQcarry", argLength: 2, reg: gp21flags, typ: "(UInt64,Flags)", asm: "ADDQ", commutative: true, resultInArg0: true}, // r = arg0+arg1
+		{name: "ADCQ", argLength: 3, reg: gp2flags1flags, typ: "(UInt64,Flags)", asm: "ADCQ", commutative: true, resultInArg0: true}, // r = arg0+arg1+carry(arg2)
+		{name: "ADDQconstcarry", argLength: 1, reg: gp11flags, typ: "(UInt64,Flags)", asm: "ADDQ", aux: "Int32", resultInArg0: true}, // r = arg0+auxint
+		{name: "ADCQconst", argLength: 2, reg: gp1flags1flags, typ: "(UInt64,Flags)", asm: "ADCQ", aux: "Int32", resultInArg0: true}, // r = arg0+auxint+carry(arg1)
+
+		// The following 4 add opcodes return the low 64 bits of the difference in the first result and
+		// the borrow (if the result is negative) in the carry flag.
+		{name: "SUBQborrow", argLength: 2, reg: gp21flags, typ: "(UInt64,Flags)", asm: "SUBQ", resultInArg0: true},                    // r = arg0-arg1
+		{name: "SBBQ", argLength: 3, reg: gp2flags1flags, typ: "(UInt64,Flags)", asm: "SBBQ", resultInArg0: true},                     // r = arg0-(arg1+carry(arg2))
+		{name: "SUBQconstborrow", argLength: 1, reg: gp11flags, typ: "(UInt64,Flags)", asm: "SUBQ", aux: "Int32", resultInArg0: true}, // r = arg0-auxint
+		{name: "SBBQconst", argLength: 2, reg: gp1flags1flags, typ: "(UInt64,Flags)", asm: "SBBQ", aux: "Int32", resultInArg0: true},  // r = arg0-(auxint+carry(arg1))
 
 		{name: "MULQU2", argLength: 2, reg: regInfo{inputs: []regMask{ax, gpsp}, outputs: []regMask{dx, ax}}, commutative: true, asm: "MULQ", clobberFlags: true}, // arg0 * arg1, returns (hi, lo)
 		{name: "DIVQU2", argLength: 3, reg: regInfo{inputs: []regMask{dx, ax, gpsp}, outputs: []regMask{ax, dx}}, asm: "DIVQ", clobberFlags: true},                // arg0:arg1 / arg2 (128-bit divided by 64-bit), returns (q, r)
@@ -447,14 +467,14 @@ func init() {
 		{name: "BSWAPL", argLength: 1, reg: gp11, asm: "BSWAPL", resultInArg0: true, clobberFlags: true}, // arg0 swap bytes
 
 		// POPCNT instructions aren't guaranteed to be on the target platform (they are SSE4).
-		// Any use must be preceded by a successful check of runtime.support_popcnt.
+		// Any use must be preceded by a successful check of runtime.x86HasPOPCNT.
 		{name: "POPCNTQ", argLength: 1, reg: gp11, asm: "POPCNTQ", clobberFlags: true}, // count number of set bits in arg0
 		{name: "POPCNTL", argLength: 1, reg: gp11, asm: "POPCNTL", clobberFlags: true}, // count number of set bits in arg0
 
 		{name: "SQRTSD", argLength: 1, reg: fp11, asm: "SQRTSD"}, // sqrt(arg0)
 
 		// ROUNDSD instruction isn't guaranteed to be on the target platform (it is SSE4.1)
-		// Any use must be preceded by a successful check of runtime.support_sse41.
+		// Any use must be preceded by a successful check of runtime.x86HasSSE41.
 		{name: "ROUNDSD", argLength: 1, reg: fp11, aux: "Int8", asm: "ROUNDSD"}, // rounds arg0 depending on auxint, 1 means math.Floor, 2 Ceil, 3 Trunc
 
 		{name: "SBBQcarrymask", argLength: 1, reg: flagsgp, asm: "SBBQ"}, // (int64)(-1) if carry is set, 0 if carry is clear.

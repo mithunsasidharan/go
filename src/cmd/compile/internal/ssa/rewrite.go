@@ -177,23 +177,11 @@ func canMergeSym(x, y interface{}) bool {
 	return x == nil || y == nil
 }
 
-// canMergeLoad reports whether the load can be merged into target without
+// canMergeLoadClobber reports whether the load can be merged into target without
 // invalidating the schedule.
 // It also checks that the other non-load argument x is something we
-// are ok with clobbering (all our current load+op instructions clobber
-// their input register).
-func canMergeLoad(target, load, x *Value) bool {
-	if target.Block.ID != load.Block.ID {
-		// If the load is in a different block do not merge it.
-		return false
-	}
-
-	// We can't merge the load into the target if the load
-	// has more than one use.
-	if load.Uses != 1 {
-		return false
-	}
-
+// are ok with clobbering.
+func canMergeLoadClobber(target, load, x *Value) bool {
 	// The register containing x is going to get clobbered.
 	// Don't merge if we still need the value of x.
 	// We don't have liveness information here, but we can
@@ -206,6 +194,22 @@ func canMergeLoad(target, load, x *Value) bool {
 	loopnest := x.Block.Func.loopnest()
 	loopnest.calculateDepths()
 	if loopnest.depth(target.Block.ID) > loopnest.depth(x.Block.ID) {
+		return false
+	}
+	return canMergeLoad(target, load)
+}
+
+// canMergeLoad reports whether the load can be merged into target without
+// invalidating the schedule.
+func canMergeLoad(target, load *Value) bool {
+	if target.Block.ID != load.Block.ID {
+		// If the load is in a different block do not merge it.
+		return false
+	}
+
+	// We can't merge the load into the target if the load
+	// has more than one use.
+	if load.Uses != 1 {
 		return false
 	}
 
@@ -316,7 +320,7 @@ func canMergeLoad(target, load, x *Value) bool {
 	return true
 }
 
-// isSameSym returns whether sym is the same as the given named symbol
+// isSameSym reports whether sym is the same as the given named symbol
 func isSameSym(sym interface{}, name string) bool {
 	s, ok := sym.(fmt.Stringer)
 	return ok && s.String() == name
@@ -451,6 +455,16 @@ func extend32Fto64F(f float32) float64 {
 	return math.Float64frombits(r)
 }
 
+// NeedsFixUp reports whether the division needs fix-up code.
+func NeedsFixUp(v *Value) bool {
+	return v.AuxInt == 0
+}
+
+// i2f is used in rules for converting from an AuxInt to a float.
+func i2f(i int64) float64 {
+	return math.Float64frombits(uint64(i))
+}
+
 // auxFrom64F encodes a float64 value so it can be stored in an AuxInt.
 func auxFrom64F(f float64) int64 {
 	return int64(math.Float64bits(f))
@@ -471,7 +485,7 @@ func auxTo64F(i int64) float64 {
 	return math.Float64frombits(uint64(i))
 }
 
-// uaddOvf returns true if unsigned a+b would overflow.
+// uaddOvf reports whether unsigned a+b would overflow.
 func uaddOvf(a, b int64) bool {
 	return uint64(a)+uint64(b) < uint64(a)
 }
@@ -516,6 +530,13 @@ func isSamePtr(p1, p2 *Value) bool {
 	return false
 }
 
+func isStackPtr(v *Value) bool {
+	for v.Op == OpOffPtr || v.Op == OpAddPtr {
+		v = v.Args[0]
+	}
+	return v.Op == OpSP || v.Op == OpLocalAddr
+}
+
 // disjoint reports whether the memory region specified by [p1:p1+n1)
 // does not overlap with [p2:p2+n2).
 // A return value of false does not imply the regions overlap.
@@ -528,7 +549,7 @@ func disjoint(p1 *Value, n1 int64, p2 *Value, n2 int64) bool {
 	}
 	baseAndOffset := func(ptr *Value) (base *Value, offset int64) {
 		base, offset = ptr, 0
-		if base.Op == OpOffPtr {
+		for base.Op == OpOffPtr {
 			offset += base.AuxInt
 			base = base.Args[0]
 		}

@@ -79,7 +79,7 @@ const (
 func (b *wbBuf) reset() {
 	start := uintptr(unsafe.Pointer(&b.buf[0]))
 	b.next = start
-	if writeBarrier.cgo {
+	if writeBarrier.cgo || (debugCachedWork && throwOnGCWork) {
 		// Effectively disable the buffer by forcing a flush
 		// on every barrier.
 		b.end = uintptr(unsafe.Pointer(&b.buf[wbBufEntryPointers]))
@@ -107,7 +107,7 @@ func (b *wbBuf) discard() {
 	b.next = uintptr(unsafe.Pointer(&b.buf[0]))
 }
 
-// empty returns true if b contains no pointers.
+// empty reports whether b contains no pointers.
 func (b *wbBuf) empty() bool {
 	return b.next == uintptr(unsafe.Pointer(&b.buf[0]))
 }

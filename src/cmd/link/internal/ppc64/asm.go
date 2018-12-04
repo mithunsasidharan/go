@@ -133,7 +133,7 @@ func genplt(ctxt *ld.Link) {
 }
 
 func genaddmoduledata(ctxt *ld.Link) {
-	addmoduledata := ctxt.Syms.ROLookup("runtime.addmoduledata", 0)
+	addmoduledata := ctxt.Syms.ROLookup("runtime.addmoduledata", sym.SymVerABI0)
 	if addmoduledata.Type == sym.STEXT && ctxt.BuildMode != ld.BuildModePlugin {
 		return
 	}
@@ -262,6 +262,14 @@ func gencallstub(ctxt *ld.Link, abicase int, stub *sym.Symbol, targ *sym.Symbol)
 }
 
 func adddynrel(ctxt *ld.Link, s *sym.Symbol, r *sym.Reloc) bool {
+	if ctxt.IsELF {
+		return addelfdynrel(ctxt, s, r)
+	} else if ctxt.HeadType == objabi.Haix {
+		return ld.Xcoffadddynrel(ctxt, s, r)
+	}
+	return false
+}
+func addelfdynrel(ctxt *ld.Link, s *sym.Symbol, r *sym.Reloc) bool {
 	targ := r.Sym
 
 	switch r.Type {
@@ -374,6 +382,13 @@ func adddynrel(ctxt *ld.Link, s *sym.Symbol, r *sym.Reloc) bool {
 }
 
 func elfreloc1(ctxt *ld.Link, r *sym.Reloc, sectoff int64) bool {
+	// Beware that bit0~bit15 start from the third byte of a instruction in Big-Endian machines.
+	if r.Type == objabi.R_ADDR || r.Type == objabi.R_POWER_TLS ||  r.Type == objabi.R_CALLPOWER {
+	} else {
+		if ctxt.Arch.ByteOrder == binary.BigEndian {
+			sectoff += 2
+		}
+	}
 	ctxt.Out.Write64(uint64(sectoff))
 
 	elfsym := r.Xsym.ElfsymForReloc()
@@ -474,7 +489,40 @@ func symtoc(ctxt *ld.Link, s *sym.Symbol) int64 {
 	return toc.Value
 }
 
+func archreloctoc(ctxt *ld.Link, r *sym.Reloc, s *sym.Symbol, val int64) int64 {
+	var o1, o2 uint32
+
+	o1 = uint32(val >> 32)
+	o2 = uint32(val)
+
+	t := ld.Symaddr(r.Sym) + r.Add - ctxt.Syms.ROLookup("TOC", 0).Value // sym addr
+	if t != int64(int32(t)) {
+		ld.Errorf(s, "TOC relocation for %s is too big to relocate %s: 0x%x", s.Name, r.Sym, t)
+	}
+
+	if t&0x8000 != 0 {
+		t += 0x10000
+	}
+
+	o1 |= uint32((t >> 16) & 0xFFFF)
+
+	switch r.Type {
+	case objabi.R_ADDRPOWER_TOCREL_DS:
+		if t&3 != 0 {
+			ld.Errorf(s, "bad DS reloc for %s: %d", s.Name, ld.Symaddr(r.Sym))
+		}
+		o2 |= uint32(t) & 0xFFFC
+	default:
+		return -1
+	}
+
+	return int64(o1)<<32 | int64(o2)
+}
+
 func archrelocaddr(ctxt *ld.Link, r *sym.Reloc, s *sym.Symbol, val int64) int64 {
+	if ctxt.HeadType == objabi.Haix {
+		ld.Errorf(s, "archrelocaddr called for %s relocation\n", r.Sym.Name)
+	}
 	var o1, o2 uint32
 	if ctxt.Arch.ByteOrder == binary.BigEndian {
 		o1 = uint32(val >> 32)
@@ -493,7 +541,7 @@ func archrelocaddr(ctxt *ld.Link, r *sym.Reloc, s *sym.Symbol, val int64) int64 
 
 	t := ld.Symaddr(r.Sym) + r.Add
 	if t < 0 || t >= 1<<31 {
-		ld.Errorf(s, "relocation for %s is too big (>=2G): %d", s.Name, ld.Symaddr(r.Sym))
+		ld.Errorf(s, "relocation for %s is too big (>=2G): 0x%x", s.Name, ld.Symaddr(r.Sym))
 	}
 	if t&0x8000 != 0 {
 		t += 0x10000
@@ -667,6 +715,8 @@ func archreloc(ctxt *ld.Link, r *sym.Reloc, s *sym.Symbol, val int64) (int64, bo
 		return r.Add, true
 	case objabi.R_GOTOFF:
 		return ld.Symaddr(r.Sym) + r.Add - ld.Symaddr(ctxt.Syms.Lookup(".got", 0)), true
+	case objabi.R_ADDRPOWER_TOCREL, objabi.R_ADDRPOWER_TOCREL_DS:
+		return archreloctoc(ctxt, r, s, val), true
 	case objabi.R_ADDRPOWER, objabi.R_ADDRPOWER_DS:
 		return archrelocaddr(ctxt, r, s, val), true
 	case objabi.R_CALLPOWER:
@@ -692,6 +742,11 @@ func archreloc(ctxt *ld.Link, r *sym.Reloc, s *sym.Symbol, val int64) (int64, bo
 		// Runtime Handling" of "Power Architecture 64-Bit ELF V2 ABI
 		// Specification".
 		v := r.Sym.Value - 0x7000
+		if ctxt.HeadType == objabi.Haix {
+			// On AIX, the thread pointer points 0x7800 bytes after
+			// the TLS.
+			v -= 0x800
+		}
 		if int64(int16(v)) != v {
 			ld.Errorf(s, "TLS offset out of range %d", v)
 		}
@@ -960,6 +1015,9 @@ func asmb(ctxt *ld.Link) {
 
 		case objabi.Hplan9:
 			symo = uint32(ld.Segdata.Fileoff + ld.Segdata.Filelen)
+
+		case objabi.Haix:
+			// Nothing to do
 		}
 
 		ctxt.Out.SeekSet(int64(symo))
@@ -988,6 +1046,10 @@ func asmb(ctxt *ld.Link) {
 				ctxt.Out.Write(sym.P)
 				ctxt.Out.Flush()
 			}
+
+		case objabi.Haix:
+			// symtab must be added once sections have been created in ld.Asmbxcoff
+			ctxt.Out.Flush()
 		}
 	}
 
@@ -1013,6 +1075,11 @@ func asmb(ctxt *ld.Link) {
 		objabi.Hopenbsd,
 		objabi.Hnacl:
 		ld.Asmbelf(ctxt, int64(symo))
+
+	case objabi.Haix:
+		fileoff := uint32(ld.Segdwarf.Fileoff + ld.Segdwarf.Filelen)
+		fileoff = uint32(ld.Rnd(int64(fileoff), int64(*ld.FlagRound)))
+		ld.Asmbxcoff(ctxt, int64(fileoff))
 	}
 
 	ctxt.Out.Flush()

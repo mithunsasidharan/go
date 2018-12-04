@@ -24,8 +24,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"golang_org/x/crypto/cryptobyte"
-	cryptobyte_asn1 "golang_org/x/crypto/cryptobyte/asn1"
+	"internal/x/crypto/cryptobyte"
+	cryptobyte_asn1 "internal/x/crypto/cryptobyte/asn1"
 	"io"
 	"math/big"
 	"net"
@@ -1147,7 +1147,7 @@ func parseSANExtension(value []byte) (dnsNames, emailAddresses []string, ipAddre
 	return
 }
 
-// isValidIPMask returns true iff mask consists of zero or more 1 bits, followed by zero bits.
+// isValidIPMask reports whether mask consists of zero or more 1 bits, followed by zero bits.
 func isValidIPMask(mask []byte) bool {
 	seenZero := false
 
@@ -1641,7 +1641,7 @@ var (
 	oidAuthorityInfoAccessIssuers = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 48, 2}
 )
 
-// oidNotInExtensions returns whether an extension with the given oid exists in
+// oidNotInExtensions reports whether an extension with the given oid exists in
 // extensions.
 func oidInExtensions(oid asn1.ObjectIdentifier, extensions []pkix.Extension) bool {
 	for _, e := range extensions {

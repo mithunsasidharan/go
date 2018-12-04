@@ -22,6 +22,13 @@ const (
 	workbufAlloc = 32 << 10
 )
 
+// throwOnGCWork causes any operations that add pointers to a gcWork
+// buffer to throw.
+//
+// TODO(austin): This is a temporary debugging measure for issue
+// #27993. To be removed before release.
+var throwOnGCWork bool
+
 func init() {
 	if workbufAlloc%pageSize != 0 || workbufAlloc%_WorkbufSize != 0 {
 		throw("bad workbufAlloc")
@@ -86,6 +93,10 @@ type gcWork struct {
 	// termination check. Specifically, this indicates that this
 	// gcWork may have communicated work to another gcWork.
 	flushedWork bool
+
+	// pauseGen causes put operations to spin while pauseGen ==
+	// gcWorkPauseGen if debugCachedWork is true.
+	pauseGen uint32
 }
 
 // Most of the methods of gcWork are go:nowritebarrierrec because the
@@ -104,10 +115,22 @@ func (w *gcWork) init() {
 	w.wbuf2 = wbuf2
 }
 
+func (w *gcWork) checkPut() {
+	if debugCachedWork {
+		for atomic.Load(&gcWorkPauseGen) == w.pauseGen {
+		}
+		if throwOnGCWork {
+			throw("throwOnGCWork")
+		}
+	}
+}
+
 // put enqueues a pointer for the garbage collector to trace.
 // obj must point to the beginning of a heap object or an oblet.
 //go:nowritebarrierrec
 func (w *gcWork) put(obj uintptr) {
+	w.checkPut()
+
 	flushed := false
 	wbuf := w.wbuf1
 	if wbuf == nil {
@@ -138,10 +161,12 @@ func (w *gcWork) put(obj uintptr) {
 	}
 }
 
-// putFast does a put and returns true if it can be done quickly
+// putFast does a put and reports whether it can be done quickly
 // otherwise it returns false and the caller needs to call put.
 //go:nowritebarrierrec
 func (w *gcWork) putFast(obj uintptr) bool {
+	w.checkPut()
+
 	wbuf := w.wbuf1
 	if wbuf == nil {
 		return false
@@ -162,6 +187,8 @@ func (w *gcWork) putBatch(obj []uintptr) {
 	if len(obj) == 0 {
 		return
 	}
+
+	w.checkPut()
 
 	flushed := false
 	wbuf := w.wbuf1
@@ -284,10 +311,12 @@ func (w *gcWork) balance() {
 		return
 	}
 	if wbuf := w.wbuf2; wbuf.nobj != 0 {
+		w.checkPut()
 		putfull(wbuf)
 		w.flushedWork = true
 		w.wbuf2 = getempty()
 	} else if wbuf := w.wbuf1; wbuf.nobj > 4 {
+		w.checkPut()
 		w.wbuf1 = handoff(wbuf)
 		w.flushedWork = true // handoff did putfull
 	} else {
@@ -299,7 +328,7 @@ func (w *gcWork) balance() {
 	}
 }
 
-// empty returns true if w has no mark work available.
+// empty reports whether w has no mark work available.
 //go:nowritebarrierrec
 func (w *gcWork) empty() bool {
 	return w.wbuf1 == nil || (w.wbuf1.nobj == 0 && w.wbuf2.nobj == 0)

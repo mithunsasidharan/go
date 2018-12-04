@@ -12,6 +12,7 @@ import (
 	"go/doc"
 	"go/format"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"io"
 	"log"
@@ -206,7 +207,15 @@ func (pkg *Package) newlines(n int) {
 // clears the stuff we don't want to print anyway. It's a bit of a magic trick.
 func (pkg *Package) emit(comment string, node ast.Node) {
 	if node != nil {
-		err := format.Node(&pkg.buf, pkg.fs, node)
+		var arg interface{} = node
+		if showSrc {
+			// Need an extra little dance to get internal comments to appear.
+			arg = &printer.CommentedNode{
+				Node:     node,
+				Comments: pkg.file.Comments,
+			}
+		}
+		err := format.Node(&pkg.buf, pkg.fs, arg)
 		if err != nil {
 			log.Fatal(err)
 		}

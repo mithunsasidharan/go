@@ -3,11 +3,13 @@
 
 package ssa
 
+import "fmt"
 import "math"
 import "cmd/internal/obj"
 import "cmd/internal/objabi"
 import "cmd/compile/internal/types"
 
+var _ = fmt.Println   // in case not otherwise used
 var _ = math.MinInt8  // in case not otherwise used
 var _ = obj.ANOP      // in case not otherwise used
 var _ = objabi.GOROOT // in case not otherwise used
@@ -37,8 +39,6 @@ func rewriteValuegeneric(v *Value) bool {
 		return rewriteValuegeneric_OpAnd64_0(v) || rewriteValuegeneric_OpAnd64_10(v) || rewriteValuegeneric_OpAnd64_20(v)
 	case OpAnd8:
 		return rewriteValuegeneric_OpAnd8_0(v) || rewriteValuegeneric_OpAnd8_10(v) || rewriteValuegeneric_OpAnd8_20(v)
-	case OpArg:
-		return rewriteValuegeneric_OpArg_0(v) || rewriteValuegeneric_OpArg_10(v)
 	case OpArraySelect:
 		return rewriteValuegeneric_OpArraySelect_0(v)
 	case OpCom16:
@@ -6811,259 +6811,6 @@ func rewriteValuegeneric_OpAnd8_20(v *Value) bool {
 		v0.AuxInt = int64(int8(c & d))
 		v.AddArg(v0)
 		v.AddArg(x)
-		return true
-	}
-	return false
-}
-func rewriteValuegeneric_OpArg_0(v *Value) bool {
-	b := v.Block
-	_ = b
-	config := b.Func.Config
-	_ = config
-	fe := b.Func.fe
-	_ = fe
-	typ := &b.Func.Config.Types
-	_ = typ
-	// match: (Arg {n} [off])
-	// cond: v.Type.IsString()
-	// result: (StringMake (Arg <typ.BytePtr> {n} [off]) (Arg <typ.Int> {n} [off+config.PtrSize]))
-	for {
-		off := v.AuxInt
-		n := v.Aux
-		if !(v.Type.IsString()) {
-			break
-		}
-		v.reset(OpStringMake)
-		v0 := b.NewValue0(v.Pos, OpArg, typ.BytePtr)
-		v0.AuxInt = off
-		v0.Aux = n
-		v.AddArg(v0)
-		v1 := b.NewValue0(v.Pos, OpArg, typ.Int)
-		v1.AuxInt = off + config.PtrSize
-		v1.Aux = n
-		v.AddArg(v1)
-		return true
-	}
-	// match: (Arg {n} [off])
-	// cond: v.Type.IsSlice()
-	// result: (SliceMake (Arg <v.Type.Elem().PtrTo()> {n} [off]) (Arg <typ.Int> {n} [off+config.PtrSize]) (Arg <typ.Int> {n} [off+2*config.PtrSize]))
-	for {
-		off := v.AuxInt
-		n := v.Aux
-		if !(v.Type.IsSlice()) {
-			break
-		}
-		v.reset(OpSliceMake)
-		v0 := b.NewValue0(v.Pos, OpArg, v.Type.Elem().PtrTo())
-		v0.AuxInt = off
-		v0.Aux = n
-		v.AddArg(v0)
-		v1 := b.NewValue0(v.Pos, OpArg, typ.Int)
-		v1.AuxInt = off + config.PtrSize
-		v1.Aux = n
-		v.AddArg(v1)
-		v2 := b.NewValue0(v.Pos, OpArg, typ.Int)
-		v2.AuxInt = off + 2*config.PtrSize
-		v2.Aux = n
-		v.AddArg(v2)
-		return true
-	}
-	// match: (Arg {n} [off])
-	// cond: v.Type.IsInterface()
-	// result: (IMake (Arg <typ.Uintptr> {n} [off]) (Arg <typ.BytePtr> {n} [off+config.PtrSize]))
-	for {
-		off := v.AuxInt
-		n := v.Aux
-		if !(v.Type.IsInterface()) {
-			break
-		}
-		v.reset(OpIMake)
-		v0 := b.NewValue0(v.Pos, OpArg, typ.Uintptr)
-		v0.AuxInt = off
-		v0.Aux = n
-		v.AddArg(v0)
-		v1 := b.NewValue0(v.Pos, OpArg, typ.BytePtr)
-		v1.AuxInt = off + config.PtrSize
-		v1.Aux = n
-		v.AddArg(v1)
-		return true
-	}
-	// match: (Arg {n} [off])
-	// cond: v.Type.IsComplex() && v.Type.Size() == 16
-	// result: (ComplexMake (Arg <typ.Float64> {n} [off]) (Arg <typ.Float64> {n} [off+8]))
-	for {
-		off := v.AuxInt
-		n := v.Aux
-		if !(v.Type.IsComplex() && v.Type.Size() == 16) {
-			break
-		}
-		v.reset(OpComplexMake)
-		v0 := b.NewValue0(v.Pos, OpArg, typ.Float64)
-		v0.AuxInt = off
-		v0.Aux = n
-		v.AddArg(v0)
-		v1 := b.NewValue0(v.Pos, OpArg, typ.Float64)
-		v1.AuxInt = off + 8
-		v1.Aux = n
-		v.AddArg(v1)
-		return true
-	}
-	// match: (Arg {n} [off])
-	// cond: v.Type.IsComplex() && v.Type.Size() == 8
-	// result: (ComplexMake (Arg <typ.Float32> {n} [off]) (Arg <typ.Float32> {n} [off+4]))
-	for {
-		off := v.AuxInt
-		n := v.Aux
-		if !(v.Type.IsComplex() && v.Type.Size() == 8) {
-			break
-		}
-		v.reset(OpComplexMake)
-		v0 := b.NewValue0(v.Pos, OpArg, typ.Float32)
-		v0.AuxInt = off
-		v0.Aux = n
-		v.AddArg(v0)
-		v1 := b.NewValue0(v.Pos, OpArg, typ.Float32)
-		v1.AuxInt = off + 4
-		v1.Aux = n
-		v.AddArg(v1)
-		return true
-	}
-	// match: (Arg <t>)
-	// cond: t.IsStruct() && t.NumFields() == 0 && fe.CanSSA(t)
-	// result: (StructMake0)
-	for {
-		t := v.Type
-		if !(t.IsStruct() && t.NumFields() == 0 && fe.CanSSA(t)) {
-			break
-		}
-		v.reset(OpStructMake0)
-		return true
-	}
-	// match: (Arg <t> {n} [off])
-	// cond: t.IsStruct() && t.NumFields() == 1 && fe.CanSSA(t)
-	// result: (StructMake1 (Arg <t.FieldType(0)> {n} [off+t.FieldOff(0)]))
-	for {
-		t := v.Type
-		off := v.AuxInt
-		n := v.Aux
-		if !(t.IsStruct() && t.NumFields() == 1 && fe.CanSSA(t)) {
-			break
-		}
-		v.reset(OpStructMake1)
-		v0 := b.NewValue0(v.Pos, OpArg, t.FieldType(0))
-		v0.AuxInt = off + t.FieldOff(0)
-		v0.Aux = n
-		v.AddArg(v0)
-		return true
-	}
-	// match: (Arg <t> {n} [off])
-	// cond: t.IsStruct() && t.NumFields() == 2 && fe.CanSSA(t)
-	// result: (StructMake2 (Arg <t.FieldType(0)> {n} [off+t.FieldOff(0)]) (Arg <t.FieldType(1)> {n} [off+t.FieldOff(1)]))
-	for {
-		t := v.Type
-		off := v.AuxInt
-		n := v.Aux
-		if !(t.IsStruct() && t.NumFields() == 2 && fe.CanSSA(t)) {
-			break
-		}
-		v.reset(OpStructMake2)
-		v0 := b.NewValue0(v.Pos, OpArg, t.FieldType(0))
-		v0.AuxInt = off + t.FieldOff(0)
-		v0.Aux = n
-		v.AddArg(v0)
-		v1 := b.NewValue0(v.Pos, OpArg, t.FieldType(1))
-		v1.AuxInt = off + t.FieldOff(1)
-		v1.Aux = n
-		v.AddArg(v1)
-		return true
-	}
-	// match: (Arg <t> {n} [off])
-	// cond: t.IsStruct() && t.NumFields() == 3 && fe.CanSSA(t)
-	// result: (StructMake3 (Arg <t.FieldType(0)> {n} [off+t.FieldOff(0)]) (Arg <t.FieldType(1)> {n} [off+t.FieldOff(1)]) (Arg <t.FieldType(2)> {n} [off+t.FieldOff(2)]))
-	for {
-		t := v.Type
-		off := v.AuxInt
-		n := v.Aux
-		if !(t.IsStruct() && t.NumFields() == 3 && fe.CanSSA(t)) {
-			break
-		}
-		v.reset(OpStructMake3)
-		v0 := b.NewValue0(v.Pos, OpArg, t.FieldType(0))
-		v0.AuxInt = off + t.FieldOff(0)
-		v0.Aux = n
-		v.AddArg(v0)
-		v1 := b.NewValue0(v.Pos, OpArg, t.FieldType(1))
-		v1.AuxInt = off + t.FieldOff(1)
-		v1.Aux = n
-		v.AddArg(v1)
-		v2 := b.NewValue0(v.Pos, OpArg, t.FieldType(2))
-		v2.AuxInt = off + t.FieldOff(2)
-		v2.Aux = n
-		v.AddArg(v2)
-		return true
-	}
-	// match: (Arg <t> {n} [off])
-	// cond: t.IsStruct() && t.NumFields() == 4 && fe.CanSSA(t)
-	// result: (StructMake4 (Arg <t.FieldType(0)> {n} [off+t.FieldOff(0)]) (Arg <t.FieldType(1)> {n} [off+t.FieldOff(1)]) (Arg <t.FieldType(2)> {n} [off+t.FieldOff(2)]) (Arg <t.FieldType(3)> {n} [off+t.FieldOff(3)]))
-	for {
-		t := v.Type
-		off := v.AuxInt
-		n := v.Aux
-		if !(t.IsStruct() && t.NumFields() == 4 && fe.CanSSA(t)) {
-			break
-		}
-		v.reset(OpStructMake4)
-		v0 := b.NewValue0(v.Pos, OpArg, t.FieldType(0))
-		v0.AuxInt = off + t.FieldOff(0)
-		v0.Aux = n
-		v.AddArg(v0)
-		v1 := b.NewValue0(v.Pos, OpArg, t.FieldType(1))
-		v1.AuxInt = off + t.FieldOff(1)
-		v1.Aux = n
-		v.AddArg(v1)
-		v2 := b.NewValue0(v.Pos, OpArg, t.FieldType(2))
-		v2.AuxInt = off + t.FieldOff(2)
-		v2.Aux = n
-		v.AddArg(v2)
-		v3 := b.NewValue0(v.Pos, OpArg, t.FieldType(3))
-		v3.AuxInt = off + t.FieldOff(3)
-		v3.Aux = n
-		v.AddArg(v3)
-		return true
-	}
-	return false
-}
-func rewriteValuegeneric_OpArg_10(v *Value) bool {
-	b := v.Block
-	_ = b
-	fe := b.Func.fe
-	_ = fe
-	// match: (Arg <t>)
-	// cond: t.IsArray() && t.NumElem() == 0
-	// result: (ArrayMake0)
-	for {
-		t := v.Type
-		if !(t.IsArray() && t.NumElem() == 0) {
-			break
-		}
-		v.reset(OpArrayMake0)
-		return true
-	}
-	// match: (Arg <t> {n} [off])
-	// cond: t.IsArray() && t.NumElem() == 1 && fe.CanSSA(t)
-	// result: (ArrayMake1 (Arg <t.Elem()> {n} [off]))
-	for {
-		t := v.Type
-		off := v.AuxInt
-		n := v.Aux
-		if !(t.IsArray() && t.NumElem() == 1 && fe.CanSSA(t)) {
-			break
-		}
-		v.reset(OpArrayMake1)
-		v0 := b.NewValue0(v.Pos, OpArg, t.Elem())
-		v0.AuxInt = off
-		v0.Aux = n
-		v.AddArg(v0)
 		return true
 	}
 	return false
@@ -17232,6 +16979,8 @@ func rewriteValuegeneric_OpMove_10(v *Value) bool {
 func rewriteValuegeneric_OpMove_20(v *Value) bool {
 	b := v.Block
 	_ = b
+	config := b.Func.Config
+	_ = config
 	// match: (Move {t1} [n] dst p1 mem:(VarDef (Store {t2} (OffPtr <tt2> [o2] p2) d1 (Store {t3} (OffPtr <tt3> [o3] p3) d2 (Store {t4} (OffPtr <tt4> [o4] p4) d3 (Store {t5} (OffPtr <tt5> [o5] p5) d4 (Zero {t6} [n] p6 _)))))))
 	// cond: isSamePtr(p1, p2) && isSamePtr(p2, p3) && isSamePtr(p3, p4) && isSamePtr(p4, p5) && isSamePtr(p5, p6) && alignof(t2) <= alignof(t1) && alignof(t3) <= alignof(t1) && alignof(t4) <= alignof(t1) && alignof(t5) <= alignof(t1) && alignof(t6) <= alignof(t1) && registerizable(b, t2) && registerizable(b, t3) && registerizable(b, t4) && registerizable(b, t5) && n >= o2 + sizeof(t2) && n >= o3 + sizeof(t3) && n >= o4 + sizeof(t4) && n >= o5 + sizeof(t5)
 	// result: (Store {t2} (OffPtr <tt2> [o2] dst) d1 (Store {t3} (OffPtr <tt3> [o3] dst) d2 (Store {t4} (OffPtr <tt4> [o4] dst) d3 (Store {t5} (OffPtr <tt5> [o5] dst) d4 (Zero {t1} [n] dst mem)))))
@@ -17351,6 +17100,88 @@ func rewriteValuegeneric_OpMove_20(v *Value) bool {
 		v3.AddArg(v5)
 		v1.AddArg(v3)
 		v.AddArg(v1)
+		return true
+	}
+	// match: (Move {t1} [s] dst tmp1 midmem:(Move {t2} [s] tmp2 src _))
+	// cond: t1.(*types.Type).Compare(t2.(*types.Type)) == types.CMPeq && isSamePtr(tmp1, tmp2) && isStackPtr(src) && disjoint(src, s, tmp2, s) && (disjoint(src, s, dst, s) || isInlinableMemmove(dst, src, s, config))
+	// result: (Move {t1} [s] dst src midmem)
+	for {
+		s := v.AuxInt
+		t1 := v.Aux
+		_ = v.Args[2]
+		dst := v.Args[0]
+		tmp1 := v.Args[1]
+		midmem := v.Args[2]
+		if midmem.Op != OpMove {
+			break
+		}
+		if midmem.AuxInt != s {
+			break
+		}
+		t2 := midmem.Aux
+		_ = midmem.Args[2]
+		tmp2 := midmem.Args[0]
+		src := midmem.Args[1]
+		if !(t1.(*types.Type).Compare(t2.(*types.Type)) == types.CMPeq && isSamePtr(tmp1, tmp2) && isStackPtr(src) && disjoint(src, s, tmp2, s) && (disjoint(src, s, dst, s) || isInlinableMemmove(dst, src, s, config))) {
+			break
+		}
+		v.reset(OpMove)
+		v.AuxInt = s
+		v.Aux = t1
+		v.AddArg(dst)
+		v.AddArg(src)
+		v.AddArg(midmem)
+		return true
+	}
+	// match: (Move {t1} [s] dst tmp1 midmem:(VarDef (Move {t2} [s] tmp2 src _)))
+	// cond: t1.(*types.Type).Compare(t2.(*types.Type)) == types.CMPeq && isSamePtr(tmp1, tmp2) && isStackPtr(src) && disjoint(src, s, tmp2, s) && (disjoint(src, s, dst, s) || isInlinableMemmove(dst, src, s, config))
+	// result: (Move {t1} [s] dst src midmem)
+	for {
+		s := v.AuxInt
+		t1 := v.Aux
+		_ = v.Args[2]
+		dst := v.Args[0]
+		tmp1 := v.Args[1]
+		midmem := v.Args[2]
+		if midmem.Op != OpVarDef {
+			break
+		}
+		midmem_0 := midmem.Args[0]
+		if midmem_0.Op != OpMove {
+			break
+		}
+		if midmem_0.AuxInt != s {
+			break
+		}
+		t2 := midmem_0.Aux
+		_ = midmem_0.Args[2]
+		tmp2 := midmem_0.Args[0]
+		src := midmem_0.Args[1]
+		if !(t1.(*types.Type).Compare(t2.(*types.Type)) == types.CMPeq && isSamePtr(tmp1, tmp2) && isStackPtr(src) && disjoint(src, s, tmp2, s) && (disjoint(src, s, dst, s) || isInlinableMemmove(dst, src, s, config))) {
+			break
+		}
+		v.reset(OpMove)
+		v.AuxInt = s
+		v.Aux = t1
+		v.AddArg(dst)
+		v.AddArg(src)
+		v.AddArg(midmem)
+		return true
+	}
+	// match: (Move dst src mem)
+	// cond: isSamePtr(dst, src)
+	// result: mem
+	for {
+		_ = v.Args[2]
+		dst := v.Args[0]
+		src := v.Args[1]
+		mem := v.Args[2]
+		if !(isSamePtr(dst, src)) {
+			break
+		}
+		v.reset(OpCopy)
+		v.Type = mem.Type
+		v.AddArg(mem)
 		return true
 	}
 	return false

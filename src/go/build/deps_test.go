@@ -62,7 +62,7 @@ var pkgDeps = map[string][]string{
 	// L1 adds simple functions and strings processing,
 	// but not Unicode tables.
 	"math":          {"internal/cpu", "unsafe"},
-	"math/bits":     {},
+	"math/bits":     {"unsafe"},
 	"math/cmplx":    {"math"},
 	"math/rand":     {"L0", "math"},
 	"strconv":       {"L0", "unicode/utf8", "math", "math/bits"},
@@ -115,6 +115,7 @@ var pkgDeps = map[string][]string{
 	"image":                  {"L2", "image/color"}, // interfaces
 	"image/color":            {"L2"},                // interfaces
 	"image/color/palette":    {"L2", "image/color"},
+	"internal/fmtsort":       {"reflect", "sort"},
 	"reflect":                {"L2"},
 	"sort":                   {"reflect"},
 
@@ -135,6 +136,7 @@ var pkgDeps = map[string][]string{
 		"image",
 		"image/color",
 		"image/color/palette",
+		"internal/fmtsort",
 		"reflect",
 	},
 
@@ -157,6 +159,7 @@ var pkgDeps = map[string][]string{
 		// Other time dependencies:
 		"internal/syscall/windows/registry",
 		"syscall",
+		"syscall/js",
 	},
 
 	"internal/poll":    {"L0", "internal/race", "syscall", "time", "unicode/utf16", "unicode/utf8", "internal/syscall/windows"},
@@ -177,8 +180,8 @@ var pkgDeps = map[string][]string{
 		"time",
 	},
 
-	// Formatted I/O: few dependencies (L1) but we must add reflect.
-	"fmt": {"L1", "os", "reflect"},
+	// Formatted I/O: few dependencies (L1) but we must add reflect and internal/fmtsort.
+	"fmt": {"L1", "os", "reflect", "internal/fmtsort"},
 	"log": {"L1", "os", "fmt", "time"},
 
 	// Packages used by testing must be low-level (L2+fmt).
@@ -269,7 +272,7 @@ var pkgDeps = map[string][]string{
 	"index/suffixarray":              {"L4", "regexp"},
 	"internal/goroot":                {"L4", "OS"},
 	"internal/singleflight":          {"sync"},
-	"internal/trace":                 {"L4", "OS"},
+	"internal/trace":                 {"L4", "OS", "container/heap"},
 	"math/big":                       {"L4"},
 	"mime":                           {"L4", "OS", "syscall", "internal/syscall/windows/registry"},
 	"mime/quotedprintable":           {"L4"},
@@ -315,9 +318,9 @@ var pkgDeps = map[string][]string{
 	"net": {
 		"L0", "CGO",
 		"context", "math/rand", "os", "reflect", "sort", "syscall", "time",
-		"internal/nettrace", "internal/poll",
+		"internal/nettrace", "internal/poll", "internal/syscall/unix",
 		"internal/syscall/windows", "internal/singleflight", "internal/race",
-		"golang_org/x/net/dns/dnsmessage", "golang_org/x/net/lif", "golang_org/x/net/route",
+		"internal/x/net/dns/dnsmessage", "internal/x/net/lif", "internal/x/net/route",
 	},
 
 	// NET enables use of basic network-related packages.
@@ -354,9 +357,9 @@ var pkgDeps = map[string][]string{
 		"crypto/sha1",
 		"crypto/sha256",
 		"crypto/sha512",
-		"golang_org/x/crypto/chacha20poly1305",
-		"golang_org/x/crypto/curve25519",
-		"golang_org/x/crypto/poly1305",
+		"internal/x/crypto/chacha20poly1305",
+		"internal/x/crypto/curve25519",
+		"internal/x/crypto/poly1305",
 	},
 
 	// Random byte, number generation.
@@ -384,13 +387,13 @@ var pkgDeps = map[string][]string{
 
 	// SSL/TLS.
 	"crypto/tls": {
-		"L4", "CRYPTO-MATH", "OS",
+		"L4", "CRYPTO-MATH", "OS", "internal/x/crypto/cryptobyte", "internal/x/crypto/hkdf",
 		"container/list", "crypto/x509", "encoding/pem", "net", "syscall",
 	},
 	"crypto/x509": {
 		"L4", "CRYPTO-MATH", "OS", "CGO",
 		"crypto/x509/pkix", "encoding/pem", "encoding/hex", "net", "os/user", "syscall", "net/url",
-		"golang_org/x/crypto/cryptobyte", "golang_org/x/crypto/cryptobyte/asn1",
+		"internal/x/crypto/cryptobyte", "internal/x/crypto/cryptobyte/asn1",
 	},
 	"crypto/x509/pkix": {"L4", "CRYPTO-MATH", "encoding/hex"},
 
@@ -406,12 +409,12 @@ var pkgDeps = map[string][]string{
 		"context",
 		"crypto/rand",
 		"crypto/tls",
-		"golang_org/x/net/http/httpguts",
-		"golang_org/x/net/http/httpproxy",
-		"golang_org/x/net/http2/hpack",
-		"golang_org/x/net/idna",
-		"golang_org/x/text/unicode/norm",
-		"golang_org/x/text/width",
+		"internal/x/net/http/httpguts",
+		"internal/x/net/http/httpproxy",
+		"internal/x/net/http2/hpack",
+		"internal/x/net/idna",
+		"internal/x/text/unicode/norm",
+		"internal/x/text/width",
 		"internal/nettrace",
 		"mime/multipart",
 		"net/http/httptrace",
@@ -429,9 +432,9 @@ var pkgDeps = map[string][]string{
 	"net/http/fcgi":      {"L4", "NET", "OS", "context", "net/http", "net/http/cgi"},
 	"net/http/httptest": {
 		"L4", "NET", "OS", "crypto/tls", "flag", "net/http", "net/http/internal", "crypto/x509",
-		"golang_org/x/net/http/httpguts",
+		"internal/x/net/http/httpguts",
 	},
-	"net/http/httputil": {"L4", "NET", "OS", "context", "net/http", "net/http/internal"},
+	"net/http/httputil": {"L4", "NET", "OS", "context", "net/http", "net/http/internal", "internal/x/net/http/httpguts"},
 	"net/http/pprof":    {"L4", "OS", "html/template", "net/http", "runtime/pprof", "runtime/trace"},
 	"net/rpc":           {"L4", "NET", "encoding/gob", "html/template", "net/http"},
 	"net/rpc/jsonrpc":   {"L4", "NET", "encoding/json", "net/rpc"},
@@ -482,7 +485,7 @@ func listStdPkgs(goroot string) ([]string, error) {
 		}
 
 		name := filepath.ToSlash(path[len(src):])
-		if name == "builtin" || name == "cmd" || strings.Contains(name, "golang_org") {
+		if name == "builtin" || name == "cmd" || strings.Contains(name, "internal/x/") {
 			return filepath.SkipDir
 		}
 

@@ -735,7 +735,7 @@ func (c *gcControllerState) findRunnableGCWorker(_p_ *p) *g {
 	return gp
 }
 
-// pollFractionalWorkerExit returns true if a fractional mark worker
+// pollFractionalWorkerExit reports whether a fractional mark worker
 // should self-preempt. It assumes it is called from the fractional
 // worker.
 func pollFractionalWorkerExit() bool {
@@ -1157,7 +1157,7 @@ const (
 	gcTriggerCycle
 )
 
-// test returns true if the trigger condition is satisfied, meaning
+// test reports whether the trigger condition is satisfied, meaning
 // that the exit condition for the _GCoff phase has been met. The exit
 // condition should be tested when allocating.
 func (t gcTrigger) test() bool {
@@ -1363,6 +1363,19 @@ func gcStart(trigger gcTrigger) {
 // This is protected by markDoneSema.
 var gcMarkDoneFlushed uint32
 
+// debugCachedWork enables extra checks for debugging premature mark
+// termination.
+//
+// For debugging issue #27993.
+const debugCachedWork = true
+
+// gcWorkPauseGen is for debugging the mark completion algorithm.
+// gcWork put operations spin while gcWork.pauseGen == gcWorkPauseGen.
+// Only used if debugCachedWork is true.
+//
+// For debugging issue #27993.
+var gcWorkPauseGen uint32 = 1
+
 // gcMarkDone transitions the GC from mark to mark termination if all
 // reachable objects have been marked (that is, there are no grey
 // objects and can be no more in the future). Otherwise, it flushes
@@ -1408,6 +1421,14 @@ top:
 			// Flush the write barrier buffer, since this may add
 			// work to the gcWork.
 			wbBufFlush1(_p_)
+			// For debugging, shrink the write barrier
+			// buffer so it flushes immediately.
+			// wbBuf.reset will keep it at this size as
+			// long as throwOnGCWork is set.
+			if debugCachedWork {
+				b := &_p_.wbBuf
+				b.end = uintptr(unsafe.Pointer(&b.buf[wbBufEntryPointers]))
+			}
 			// Flush the gcWork, since this may create global work
 			// and set the flushedWork flag.
 			//
@@ -1418,17 +1439,36 @@ top:
 			if _p_.gcw.flushedWork {
 				atomic.Xadd(&gcMarkDoneFlushed, 1)
 				_p_.gcw.flushedWork = false
+			} else if debugCachedWork {
+				// For debugging, freeze the gcWork
+				// until we know whether we've reached
+				// completion or not. If we think
+				// we've reached completion, but
+				// there's a paused gcWork, then
+				// that's a bug.
+				_p_.gcw.pauseGen = gcWorkPauseGen
 			}
 		})
 	})
 
 	if gcMarkDoneFlushed != 0 {
+		if debugCachedWork {
+			// Release paused gcWorks.
+			atomic.Xadd(&gcWorkPauseGen, 1)
+		}
 		// More grey objects were discovered since the
 		// previous termination check, so there may be more
 		// work to do. Keep going. It's possible the
 		// transition condition became true again during the
 		// ragged barrier, so re-check it.
 		goto top
+	}
+
+	if debugCachedWork {
+		throwOnGCWork = true
+		// Release paused gcWorks. If there are any, they
+		// should now observe throwOnGCWork and panic.
+		atomic.Xadd(&gcWorkPauseGen, 1)
 	}
 
 	// There was no global work, no local work, and no Ps
@@ -1446,6 +1486,30 @@ top:
 	// The gcphase is _GCmark, it will transition to _GCmarktermination
 	// below. The important thing is that the wb remains active until
 	// all marking is complete. This includes writes made by the GC.
+
+	if debugCachedWork {
+		// For debugging, double check that no work was added after we
+		// went around above and disable write barrier buffering.
+		for _, p := range allp {
+			gcw := &p.gcw
+			if !gcw.empty() {
+				printlock()
+				print("runtime: P ", p.id, " flushedWork ", gcw.flushedWork)
+				if gcw.wbuf1 == nil {
+					print(" wbuf1=<nil>")
+				} else {
+					print(" wbuf1.n=", gcw.wbuf1.nobj)
+				}
+				if gcw.wbuf2 == nil {
+					print(" wbuf2=<nil>")
+				} else {
+					print(" wbuf2.n=", gcw.wbuf2.nobj)
+				}
+				print("\n")
+				throw("throwOnGCWork")
+			}
+		}
+	}
 
 	// Disable assists and background workers. We must do
 	// this before waking blocked assists.
@@ -1867,7 +1931,7 @@ func gcBgMarkWorker(_p_ *p) {
 	}
 }
 
-// gcMarkWorkAvailable returns true if executing a mark worker
+// gcMarkWorkAvailable reports whether executing a mark worker
 // on p is potentially useful. p may be nil, in which case it only
 // checks the global sources of work.
 func gcMarkWorkAvailable(p *p) bool {
@@ -1924,7 +1988,7 @@ func gcMark(start_time int64) {
 		// ensured all reachable objects were marked, all of
 		// these must be pointers to black objects. Hence we
 		// can just discard the write barrier buffer.
-		if debug.gccheckmark > 0 {
+		if debug.gccheckmark > 0 || throwOnGCWork {
 			// For debugging, flush the buffer and make
 			// sure it really was all marked.
 			wbBufFlush1(p)
@@ -1934,6 +1998,19 @@ func gcMark(start_time int64) {
 
 		gcw := &p.gcw
 		if !gcw.empty() {
+			printlock()
+			print("runtime: P ", p.id, " flushedWork ", gcw.flushedWork)
+			if gcw.wbuf1 == nil {
+				print(" wbuf1=<nil>")
+			} else {
+				print(" wbuf1.n=", gcw.wbuf1.nobj)
+			}
+			if gcw.wbuf2 == nil {
+				print(" wbuf2=<nil>")
+			} else {
+				print(" wbuf2.n=", gcw.wbuf2.nobj)
+			}
+			print("\n")
 			throw("P has cached GC work at end of mark termination")
 		}
 		// There may still be cached empty buffers, which we
@@ -1942,6 +2019,8 @@ func gcMark(start_time int64) {
 		// black after the gcMarkDone barrier.
 		gcw.dispose()
 	}
+
+	throwOnGCWork = false
 
 	cachestats()
 
@@ -1974,6 +2053,9 @@ func gcSweep(mode gcMode) {
 		throw("non-empty swept list")
 	}
 	mheap_.pagesSwept = 0
+	mheap_.sweepArenas = mheap_.allArenas
+	mheap_.reclaimIndex = 0
+	mheap_.reclaimCredit = 0
 	unlock(&mheap_.lock)
 
 	if !_ConcurrentSweep || mode == gcForceBlockMode {
@@ -2022,6 +2104,18 @@ func gcResetMarkState() {
 		gp.gcAssistBytes = 0
 	}
 	unlock(&allglock)
+
+	// Clear page marks. This is just 1MB per 64GB of heap, so the
+	// time here is pretty trivial.
+	lock(&mheap_.lock)
+	arenas := mheap_.allArenas
+	unlock(&mheap_.lock)
+	for _, ai := range arenas {
+		ha := mheap_.arenas[ai.l1()][ai.l2()]
+		for i := range ha.pageMarks {
+			ha.pageMarks[i] = 0
+		}
+	}
 
 	work.bytesMarked = 0
 	work.initialHeapLive = atomic.Load64(&memstats.heap_live)

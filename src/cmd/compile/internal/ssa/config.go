@@ -112,7 +112,7 @@ type Logger interface {
 	// Logf logs a message from the compiler.
 	Logf(string, ...interface{})
 
-	// Log returns true if logging is not a no-op
+	// Log reports whether logging is not a no-op
 	// some logging calls account for more than a few heap allocations.
 	Log() bool
 
@@ -164,7 +164,7 @@ type Frontend interface {
 	// given name.
 	Syslook(string) *obj.LSym
 
-	// UseWriteBarrier returns whether write barrier is enabled
+	// UseWriteBarrier reports whether write barrier is enabled
 	UseWriteBarrier() bool
 
 	// SetWBPos indicates that a write barrier has been inserted
@@ -178,6 +178,7 @@ type GCNode interface {
 	Typ() *types.Type
 	String() string
 	IsSynthetic() bool
+	IsAutoTmp() bool
 	StorageClass() StorageClass
 }
 

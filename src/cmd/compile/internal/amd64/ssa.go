@@ -229,24 +229,27 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		// Result[0] (the quotient) is in AX.
 		// Result[1] (the remainder) is in DX.
 		r := v.Args[1].Reg()
+		var j1 *obj.Prog
 
 		// CPU faults upon signed overflow, which occurs when the most
 		// negative int is divided by -1. Handle divide by -1 as a special case.
-		var c *obj.Prog
-		switch v.Op {
-		case ssa.OpAMD64DIVQ:
-			c = s.Prog(x86.ACMPQ)
-		case ssa.OpAMD64DIVL:
-			c = s.Prog(x86.ACMPL)
-		case ssa.OpAMD64DIVW:
-			c = s.Prog(x86.ACMPW)
+		if ssa.NeedsFixUp(v) {
+			var c *obj.Prog
+			switch v.Op {
+			case ssa.OpAMD64DIVQ:
+				c = s.Prog(x86.ACMPQ)
+			case ssa.OpAMD64DIVL:
+				c = s.Prog(x86.ACMPL)
+			case ssa.OpAMD64DIVW:
+				c = s.Prog(x86.ACMPW)
+			}
+			c.From.Type = obj.TYPE_REG
+			c.From.Reg = r
+			c.To.Type = obj.TYPE_CONST
+			c.To.Offset = -1
+			j1 = s.Prog(x86.AJEQ)
+			j1.To.Type = obj.TYPE_BRANCH
 		}
-		c.From.Type = obj.TYPE_REG
-		c.From.Reg = r
-		c.To.Type = obj.TYPE_CONST
-		c.To.Offset = -1
-		j1 := s.Prog(x86.AJEQ)
-		j1.To.Type = obj.TYPE_BRANCH
 
 		// Sign extend dividend.
 		switch v.Op {
@@ -263,36 +266,38 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.From.Type = obj.TYPE_REG
 		p.From.Reg = r
 
-		// Skip over -1 fixup code.
-		j2 := s.Prog(obj.AJMP)
-		j2.To.Type = obj.TYPE_BRANCH
+		if j1 != nil {
+			// Skip over -1 fixup code.
+			j2 := s.Prog(obj.AJMP)
+			j2.To.Type = obj.TYPE_BRANCH
 
-		// Issue -1 fixup code.
-		// n / -1 = -n
-		var n1 *obj.Prog
-		switch v.Op {
-		case ssa.OpAMD64DIVQ:
-			n1 = s.Prog(x86.ANEGQ)
-		case ssa.OpAMD64DIVL:
-			n1 = s.Prog(x86.ANEGL)
-		case ssa.OpAMD64DIVW:
-			n1 = s.Prog(x86.ANEGW)
+			// Issue -1 fixup code.
+			// n / -1 = -n
+			var n1 *obj.Prog
+			switch v.Op {
+			case ssa.OpAMD64DIVQ:
+				n1 = s.Prog(x86.ANEGQ)
+			case ssa.OpAMD64DIVL:
+				n1 = s.Prog(x86.ANEGL)
+			case ssa.OpAMD64DIVW:
+				n1 = s.Prog(x86.ANEGW)
+			}
+			n1.To.Type = obj.TYPE_REG
+			n1.To.Reg = x86.REG_AX
+
+			// n % -1 == 0
+			n2 := s.Prog(x86.AXORL)
+			n2.From.Type = obj.TYPE_REG
+			n2.From.Reg = x86.REG_DX
+			n2.To.Type = obj.TYPE_REG
+			n2.To.Reg = x86.REG_DX
+
+			// TODO(khr): issue only the -1 fixup code we need.
+			// For instance, if only the quotient is used, no point in zeroing the remainder.
+
+			j1.To.Val = n1
+			j2.To.Val = s.Pc()
 		}
-		n1.To.Type = obj.TYPE_REG
-		n1.To.Reg = x86.REG_AX
-
-		// n % -1 == 0
-		n2 := s.Prog(x86.AXORL)
-		n2.From.Type = obj.TYPE_REG
-		n2.From.Reg = x86.REG_DX
-		n2.To.Type = obj.TYPE_REG
-		n2.To.Reg = x86.REG_DX
-
-		// TODO(khr): issue only the -1 fixup code we need.
-		// For instance, if only the quotient is used, no point in zeroing the remainder.
-
-		j1.To.Val = n1
-		j2.To.Val = s.Pc()
 
 	case ssa.OpAMD64HMULQ, ssa.OpAMD64HMULL, ssa.OpAMD64HMULQU, ssa.OpAMD64HMULLU:
 		// the frontend rewrites constant division by 8/16/32 bit integers into
@@ -354,6 +359,41 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.From.Offset = 1
 		p.To.Type = obj.TYPE_REG
 		p.To.Reg = r
+
+	case ssa.OpAMD64ADDQcarry, ssa.OpAMD64ADCQ:
+		r := v.Reg0()
+		r0 := v.Args[0].Reg()
+		r1 := v.Args[1].Reg()
+		switch r {
+		case r0:
+			p := s.Prog(v.Op.Asm())
+			p.From.Type = obj.TYPE_REG
+			p.From.Reg = r1
+			p.To.Type = obj.TYPE_REG
+			p.To.Reg = r
+		case r1:
+			p := s.Prog(v.Op.Asm())
+			p.From.Type = obj.TYPE_REG
+			p.From.Reg = r0
+			p.To.Type = obj.TYPE_REG
+			p.To.Reg = r
+		default:
+			v.Fatalf("output not in same register as an input %s", v.LongString())
+		}
+
+	case ssa.OpAMD64SUBQborrow, ssa.OpAMD64SBBQ:
+		p := s.Prog(v.Op.Asm())
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = v.Args[1].Reg()
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = v.Reg0()
+
+	case ssa.OpAMD64ADDQconstcarry, ssa.OpAMD64ADCQconst, ssa.OpAMD64SUBQconstborrow, ssa.OpAMD64SBBQconst:
+		p := s.Prog(v.Op.Asm())
+		p.From.Type = obj.TYPE_CONST
+		p.From.Offset = v.AuxInt
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = v.Reg0()
 
 	case ssa.OpAMD64ADDQconst, ssa.OpAMD64ADDLconst:
 		r := v.Reg()
@@ -722,12 +762,20 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		sc := v.AuxValAndOff()
 		off := sc.Off()
 		val := sc.Val()
-		if val == 1 {
+		if val == 1 || val == -1 {
 			var asm obj.As
 			if v.Op == ssa.OpAMD64ADDQconstmodify {
-				asm = x86.AINCQ
+				if val == 1 {
+					asm = x86.AINCQ
+				} else {
+					asm = x86.ADECQ
+				}
 			} else {
-				asm = x86.AINCL
+				if val == 1 {
+					asm = x86.AINCL
+				} else {
+					asm = x86.ADECL
+				}
 			}
 			p := s.Prog(asm)
 			p.To.Type = obj.TYPE_MEM
@@ -941,6 +989,16 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p := s.Prog(v.Op.Asm())
 		p.To.Type = obj.TYPE_REG
 		p.To.Reg = r
+
+	case ssa.OpAMD64NEGLflags:
+		r := v.Reg0()
+		if r != v.Args[0].Reg() {
+			v.Fatalf("input[0] and output not in same register %s", v.LongString())
+		}
+		p := s.Prog(v.Op.Asm())
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = r
+
 	case ssa.OpAMD64BSFQ, ssa.OpAMD64BSRQ, ssa.OpAMD64BSFL, ssa.OpAMD64BSRL, ssa.OpAMD64SQRTSD:
 		p := s.Prog(v.Op.Asm())
 		p.From.Type = obj.TYPE_REG

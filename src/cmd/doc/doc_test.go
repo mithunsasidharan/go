@@ -466,8 +466,8 @@ var tests = []test{
 		[]string{
 			`Comment about exported type`, // Include comment.
 			`type ExportedType struct`,    // Type definition.
-			`Comment before exported field.*\n.*ExportedField +int` +
-				`.*Comment on line with exported field`,
+			`Comment before exported field`,
+			`ExportedField.*Comment on line with exported field`,
 			`ExportedEmbeddedType.*Comment on line with exported embedded field`,
 			`unexportedType.*Comment on line with unexported embedded field`,
 			`func \(ExportedType\) ExportedMethod\(a int\) bool`,
@@ -479,6 +479,26 @@ var tests = []test{
 			`Comment about exported method`, // No comment about exported method.
 			`unexportedMethod`,              // No unexported method.
 			`unexportedTypedConstant`,       // No unexported constant.
+		},
+	},
+	// Type -all.
+	{
+		"type",
+		[]string{"-all", p, `ExportedType`},
+		[]string{
+			`type ExportedType struct {`,                        // Type definition as source.
+			`Comment about exported type`,                       // Include comment afterwards.
+			`const ConstGroup4 ExportedType = ExportedType\{\}`, // Related constants.
+			`ExportedTypedConstant ExportedType = iota`,
+			`Constants tied to ExportedType`,
+			`func ExportedTypeConstructor\(\) \*ExportedType`,
+			`Comment about constructor for exported type.`,
+			`func ReturnExported\(\) ExportedType`,
+			`func \(ExportedType\) ExportedMethod\(a int\) bool`,
+			`Comment about exported method.`,
+		},
+		[]string{
+			`unexportedType`,
 		},
 	},
 	// Type T1 dump (alias).

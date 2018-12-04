@@ -8,6 +8,7 @@ package httputil
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -16,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"internal/x/net/http/httpguts"
 )
 
 // ReverseProxy is an HTTP Handler that takes an incoming request and
@@ -199,6 +202,7 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	p.Director(outreq)
 	outreq.Close = false
 
+	reqUpType := upgradeType(outreq.Header)
 	removeConnectionHeaders(outreq.Header)
 
 	// Remove hop-by-hop headers to the backend. Especially
@@ -221,6 +225,13 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		outreq.Header.Del(h)
 	}
 
+	// After stripping all the hop-by-hop connection headers above, add back any
+	// necessary for protocol upgrades, such as for websockets.
+	if reqUpType != "" {
+		outreq.Header.Set("Connection", "Upgrade")
+		outreq.Header.Set("Upgrade", reqUpType)
+	}
+
 	if clientIP, _, err := net.SplitHostPort(req.RemoteAddr); err == nil {
 		// If we aren't the first proxy retain prior
 		// X-Forwarded-For information as a comma+space
@@ -234,6 +245,12 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	res, err := transport.RoundTrip(outreq)
 	if err != nil {
 		p.getErrorHandler()(rw, outreq, err)
+		return
+	}
+
+	// Deal with 101 Switching Protocols responses: (WebSocket, h2c, etc)
+	if res.StatusCode == http.StatusSwitchingProtocols {
+		p.handleUpgradeResponse(rw, outreq, res)
 		return
 	}
 
@@ -265,14 +282,7 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	rw.WriteHeader(res.StatusCode)
-	if len(res.Trailer) > 0 {
-		// Force chunking if we saw a response trailer.
-		// This prevents net/http from calculating the length for short
-		// bodies and adding a Content-Length.
-		if fl, ok := rw.(http.Flusher); ok {
-			fl.Flush()
-		}
-	}
+
 	err = p.copyResponse(rw, res.Body, p.flushInterval(req, res))
 	if err != nil {
 		defer res.Body.Close()
@@ -286,6 +296,15 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		panic(http.ErrAbortHandler)
 	}
 	res.Body.Close() // close now, instead of defer, to populate res.Trailer
+
+	if len(res.Trailer) > 0 {
+		// Force chunking if we saw a response trailer.
+		// This prevents net/http from calculating the length for short
+		// bodies and adding a Content-Length.
+		if fl, ok := rw.(http.Flusher); ok {
+			fl.Flush()
+		}
+	}
 
 	if len(res.Trailer) == announcedTrailers {
 		copyHeader(rw.Header(), res.Trailer)
@@ -462,4 +481,68 @@ func (m *maxLatencyWriter) stop() {
 	if m.t != nil {
 		m.t.Stop()
 	}
+}
+
+func upgradeType(h http.Header) string {
+	if !httpguts.HeaderValuesContainsToken(h["Connection"], "Upgrade") {
+		return ""
+	}
+	return strings.ToLower(h.Get("Upgrade"))
+}
+
+func (p *ReverseProxy) handleUpgradeResponse(rw http.ResponseWriter, req *http.Request, res *http.Response) {
+	reqUpType := upgradeType(req.Header)
+	resUpType := upgradeType(res.Header)
+	if reqUpType != resUpType {
+		p.getErrorHandler()(rw, req, fmt.Errorf("backend tried to switch protocol %q when %q was requested", resUpType, reqUpType))
+		return
+	}
+	hj, ok := rw.(http.Hijacker)
+	if !ok {
+		p.getErrorHandler()(rw, req, fmt.Errorf("can't switch protocols using non-Hijacker ResponseWriter type %T", rw))
+		return
+	}
+	backConn, ok := res.Body.(io.ReadWriteCloser)
+	if !ok {
+		p.getErrorHandler()(rw, req, fmt.Errorf("internal error: 101 switching protocols response with non-writable body"))
+		return
+	}
+	defer backConn.Close()
+	conn, brw, err := hj.Hijack()
+	if err != nil {
+		p.getErrorHandler()(rw, req, fmt.Errorf("Hijack failed on protocol switch: %v", err))
+		return
+	}
+	defer conn.Close()
+	res.Body = nil // so res.Write only writes the headers; we have res.Body in backConn above
+	if err := res.Write(brw); err != nil {
+		p.getErrorHandler()(rw, req, fmt.Errorf("response write: %v", err))
+		return
+	}
+	if err := brw.Flush(); err != nil {
+		p.getErrorHandler()(rw, req, fmt.Errorf("response flush: %v", err))
+		return
+	}
+	errc := make(chan error, 1)
+	spc := switchProtocolCopier{user: conn, backend: backConn}
+	go spc.copyToBackend(errc)
+	go spc.copyFromBackend(errc)
+	<-errc
+	return
+}
+
+// switchProtocolCopier exists so goroutines proxying data back and
+// forth have nice names in stacks.
+type switchProtocolCopier struct {
+	user, backend io.ReadWriter
+}
+
+func (c switchProtocolCopier) copyFromBackend(errc chan<- error) {
+	_, err := io.Copy(c.user, c.backend)
+	errc <- err
+}
+
+func (c switchProtocolCopier) copyToBackend(errc chan<- error) {
+	_, err := io.Copy(c.backend, c.user)
+	errc <- err
 }

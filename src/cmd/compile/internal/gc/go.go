@@ -147,7 +147,6 @@ var asmhdr string
 var simtype [NTYPE]types.EType
 
 var (
-	isforw    [NTYPE]bool
 	isInt     [NTYPE]bool
 	isFloat   [NTYPE]bool
 	isComplex [NTYPE]bool
@@ -207,8 +206,6 @@ var compiling_runtime bool
 
 // Compiling the standard library
 var compiling_std bool
-
-var compiling_wrappers bool
 
 var use_writebarrier bool
 
@@ -303,14 +300,15 @@ var (
 	panicdottypeI,
 	panicindex,
 	panicnildottype,
+	panicoverflow,
 	panicslice,
 	raceread,
 	racereadrange,
 	racewrite,
 	racewriterange,
-	supportPopcnt,
-	supportSSE41,
-	arm64SupportAtomics,
+	x86HasPOPCNT,
+	x86HasSSE41,
+	arm64HasATOMICS,
 	typedmemclr,
 	typedmemmove,
 	Udiv,

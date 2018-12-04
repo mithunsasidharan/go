@@ -523,6 +523,15 @@ const (
 	OpAMD64DIVQU
 	OpAMD64DIVLU
 	OpAMD64DIVWU
+	OpAMD64NEGLflags
+	OpAMD64ADDQcarry
+	OpAMD64ADCQ
+	OpAMD64ADDQconstcarry
+	OpAMD64ADCQconst
+	OpAMD64SUBQborrow
+	OpAMD64SBBQ
+	OpAMD64SUBQconstborrow
+	OpAMD64SBBQconst
 	OpAMD64MULQU2
 	OpAMD64DIVQU2
 	OpAMD64ANDQ
@@ -1654,10 +1663,13 @@ const (
 	OpPPC64MTVSRD
 	OpPPC64AND
 	OpPPC64ANDN
+	OpPPC64ANDCC
 	OpPPC64OR
 	OpPPC64ORN
+	OpPPC64ORCC
 	OpPPC64NOR
 	OpPPC64XOR
+	OpPPC64XORCC
 	OpPPC64EQV
 	OpPPC64NEG
 	OpPPC64FNEG
@@ -2393,6 +2405,8 @@ const (
 	OpAdd32withcarry
 	OpSub32carry
 	OpSub32withcarry
+	OpAdd64carry
+	OpSub64borrow
 	OpSignmask
 	OpZeromask
 	OpSlicemask
@@ -2409,15 +2423,18 @@ const (
 	OpAtomicLoad32
 	OpAtomicLoad64
 	OpAtomicLoadPtr
+	OpAtomicLoadAcq32
 	OpAtomicStore32
 	OpAtomicStore64
 	OpAtomicStorePtrNoWB
+	OpAtomicStoreRel32
 	OpAtomicExchange32
 	OpAtomicExchange64
 	OpAtomicAdd32
 	OpAtomicAdd64
 	OpAtomicCompareAndSwap32
 	OpAtomicCompareAndSwap64
+	OpAtomicCompareAndSwapRel32
 	OpAtomicAnd8
 	OpAtomicOr8
 	OpAtomicAdd32Variant
@@ -3216,6 +3233,7 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:         "DIVL",
+		auxType:      auxBool,
 		argLen:       2,
 		clobberFlags: true,
 		asm:          x86.AIDIVL,
@@ -3232,6 +3250,7 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:         "DIVW",
+		auxType:      auxBool,
 		argLen:       2,
 		clobberFlags: true,
 		asm:          x86.AIDIVW,
@@ -3280,6 +3299,7 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:         "MODL",
+		auxType:      auxBool,
 		argLen:       2,
 		clobberFlags: true,
 		asm:          x86.AIDIVL,
@@ -3296,6 +3316,7 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:         "MODW",
+		auxType:      auxBool,
 		argLen:       2,
 		clobberFlags: true,
 		asm:          x86.AIDIVW,
@@ -6436,6 +6457,7 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:         "DIVQ",
+		auxType:      auxBool,
 		argLen:       2,
 		clobberFlags: true,
 		asm:          x86.AIDIVQ,
@@ -6452,6 +6474,7 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:         "DIVL",
+		auxType:      auxBool,
 		argLen:       2,
 		clobberFlags: true,
 		asm:          x86.AIDIVL,
@@ -6468,6 +6491,7 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:         "DIVW",
+		auxType:      auxBool,
 		argLen:       2,
 		clobberFlags: true,
 		asm:          x86.AIDIVW,
@@ -6527,6 +6551,151 @@ var opcodeTable = [...]opInfo{
 			outputs: []outputInfo{
 				{0, 1}, // AX
 				{1, 4}, // DX
+			},
+		},
+	},
+	{
+		name:         "NEGLflags",
+		argLen:       1,
+		resultInArg0: true,
+		asm:          x86.ANEGL,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
+			},
+			outputs: []outputInfo{
+				{1, 0},
+				{0, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
+			},
+		},
+	},
+	{
+		name:         "ADDQcarry",
+		argLen:       2,
+		commutative:  true,
+		resultInArg0: true,
+		asm:          x86.AADDQ,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
+				{1, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
+			},
+			outputs: []outputInfo{
+				{1, 0},
+				{0, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
+			},
+		},
+	},
+	{
+		name:         "ADCQ",
+		argLen:       3,
+		commutative:  true,
+		resultInArg0: true,
+		asm:          x86.AADCQ,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
+				{1, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
+			},
+			outputs: []outputInfo{
+				{1, 0},
+				{0, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
+			},
+		},
+	},
+	{
+		name:         "ADDQconstcarry",
+		auxType:      auxInt32,
+		argLen:       1,
+		resultInArg0: true,
+		asm:          x86.AADDQ,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
+			},
+			outputs: []outputInfo{
+				{1, 0},
+				{0, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
+			},
+		},
+	},
+	{
+		name:         "ADCQconst",
+		auxType:      auxInt32,
+		argLen:       2,
+		resultInArg0: true,
+		asm:          x86.AADCQ,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
+			},
+			outputs: []outputInfo{
+				{1, 0},
+				{0, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
+			},
+		},
+	},
+	{
+		name:         "SUBQborrow",
+		argLen:       2,
+		resultInArg0: true,
+		asm:          x86.ASUBQ,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
+				{1, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
+			},
+			outputs: []outputInfo{
+				{1, 0},
+				{0, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
+			},
+		},
+	},
+	{
+		name:         "SBBQ",
+		argLen:       3,
+		resultInArg0: true,
+		asm:          x86.ASBBQ,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
+				{1, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
+			},
+			outputs: []outputInfo{
+				{1, 0},
+				{0, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
+			},
+		},
+	},
+	{
+		name:         "SUBQconstborrow",
+		auxType:      auxInt32,
+		argLen:       1,
+		resultInArg0: true,
+		asm:          x86.ASUBQ,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
+			},
+			outputs: []outputInfo{
+				{1, 0},
+				{0, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
+			},
+		},
+	},
+	{
+		name:         "SBBQconst",
+		auxType:      auxInt32,
+		argLen:       2,
+		resultInArg0: true,
+		asm:          x86.ASBBQ,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
+			},
+			outputs: []outputInfo{
+				{1, 0},
+				{0, 65519}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R14 R15
 			},
 		},
 	},
@@ -22037,6 +22206,21 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
+		name:        "ANDCC",
+		argLen:      2,
+		commutative: true,
+		asm:         ppc64.AANDCC,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 1073733630}, // SP SB R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+				{1, 1073733630}, // SP SB R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+			outputs: []outputInfo{
+				{0, 1073733624}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+		},
+	},
+	{
 		name:        "OR",
 		argLen:      2,
 		commutative: true,
@@ -22055,6 +22239,21 @@ var opcodeTable = [...]opInfo{
 		name:   "ORN",
 		argLen: 2,
 		asm:    ppc64.AORN,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 1073733630}, // SP SB R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+				{1, 1073733630}, // SP SB R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+			outputs: []outputInfo{
+				{0, 1073733624}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+		},
+	},
+	{
+		name:        "ORCC",
+		argLen:      2,
+		commutative: true,
+		asm:         ppc64.AORCC,
 		reg: regInfo{
 			inputs: []inputInfo{
 				{0, 1073733630}, // SP SB R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
@@ -22085,6 +22284,21 @@ var opcodeTable = [...]opInfo{
 		argLen:      2,
 		commutative: true,
 		asm:         ppc64.AXOR,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 1073733630}, // SP SB R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+				{1, 1073733630}, // SP SB R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+			outputs: []outputInfo{
+				{0, 1073733624}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+		},
+	},
+	{
+		name:        "XORCC",
+		argLen:      2,
+		commutative: true,
+		asm:         ppc64.AXORCC,
 		reg: regInfo{
 			inputs: []inputInfo{
 				{0, 1073733630}, // SP SB R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
@@ -23442,6 +23656,7 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:           "LoweredAtomicStore32",
+		auxType:        auxInt64,
 		argLen:         3,
 		faultOnNilArg0: true,
 		hasSideEffects: true,
@@ -23454,6 +23669,7 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:           "LoweredAtomicStore64",
+		auxType:        auxInt64,
 		argLen:         3,
 		faultOnNilArg0: true,
 		hasSideEffects: true,
@@ -23466,6 +23682,7 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:           "LoweredAtomicLoad32",
+		auxType:        auxInt64,
 		argLen:         2,
 		clobberFlags:   true,
 		faultOnNilArg0: true,
@@ -23480,6 +23697,7 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:           "LoweredAtomicLoad64",
+		auxType:        auxInt64,
 		argLen:         2,
 		clobberFlags:   true,
 		faultOnNilArg0: true,
@@ -23494,6 +23712,7 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:           "LoweredAtomicLoadPtr",
+		auxType:        auxInt64,
 		argLen:         2,
 		clobberFlags:   true,
 		faultOnNilArg0: true,
@@ -23576,6 +23795,7 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:            "LoweredAtomicCas64",
+		auxType:         auxInt64,
 		argLen:          4,
 		resultNotInArgs: true,
 		clobberFlags:    true,
@@ -23594,6 +23814,7 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:            "LoweredAtomicCas32",
+		auxType:         auxInt64,
 		argLen:          4,
 		resultNotInArgs: true,
 		clobberFlags:    true,
@@ -28022,6 +28243,7 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:    "Div16",
+		auxType: auxBool,
 		argLen:  2,
 		generic: true,
 	},
@@ -28032,6 +28254,7 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:    "Div32",
+		auxType: auxBool,
 		argLen:  2,
 		generic: true,
 	},
@@ -28042,6 +28265,7 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:    "Div64",
+		auxType: auxBool,
 		argLen:  2,
 		generic: true,
 	},
@@ -28067,6 +28291,7 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:    "Mod16",
+		auxType: auxBool,
 		argLen:  2,
 		generic: true,
 	},
@@ -28077,6 +28302,7 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:    "Mod32",
+		auxType: auxBool,
 		argLen:  2,
 		generic: true,
 	},
@@ -28087,6 +28313,7 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:    "Mod64",
+		auxType: auxBool,
 		argLen:  2,
 		generic: true,
 	},
@@ -29607,6 +29834,17 @@ var opcodeTable = [...]opInfo{
 		generic: true,
 	},
 	{
+		name:        "Add64carry",
+		argLen:      3,
+		commutative: true,
+		generic:     true,
+	},
+	{
+		name:    "Sub64borrow",
+		argLen:  3,
+		generic: true,
+	},
+	{
 		name:    "Signmask",
 		argLen:  1,
 		generic: true,
@@ -29689,6 +29927,11 @@ var opcodeTable = [...]opInfo{
 		generic: true,
 	},
 	{
+		name:    "AtomicLoadAcq32",
+		argLen:  2,
+		generic: true,
+	},
+	{
 		name:           "AtomicStore32",
 		argLen:         3,
 		hasSideEffects: true,
@@ -29702,6 +29945,12 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:           "AtomicStorePtrNoWB",
+		argLen:         3,
+		hasSideEffects: true,
+		generic:        true,
+	},
+	{
+		name:           "AtomicStoreRel32",
 		argLen:         3,
 		hasSideEffects: true,
 		generic:        true,
@@ -29738,6 +29987,12 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:           "AtomicCompareAndSwap64",
+		argLen:         4,
+		hasSideEffects: true,
+		generic:        true,
+	},
+	{
+		name:           "AtomicCompareAndSwapRel32",
 		argLen:         4,
 		hasSideEffects: true,
 		generic:        true,

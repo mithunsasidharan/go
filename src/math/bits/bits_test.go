@@ -6,6 +6,7 @@ package bits_test
 
 import (
 	. "math/bits"
+	"runtime"
 	"testing"
 	"unsafe"
 )
@@ -875,6 +876,89 @@ func TestMulDiv64(t *testing.T) {
 	}
 }
 
+const (
+	divZeroError  = "runtime error: integer divide by zero"
+	overflowError = "runtime error: integer overflow"
+)
+
+func TestDivPanicOverflow(t *testing.T) {
+	// Expect a panic
+	defer func() {
+		if err := recover(); err == nil {
+			t.Error("Div should have panicked when y<=hi")
+		} else if e, ok := err.(runtime.Error); !ok || e.Error() != overflowError {
+			t.Errorf("Div expected panic: %q, got: %q ", overflowError, e.Error())
+		}
+	}()
+	q, r := Div(1, 0, 1)
+	t.Errorf("undefined q, r = %v, %v calculated when Div should have panicked", q, r)
+}
+
+func TestDiv32PanicOverflow(t *testing.T) {
+	// Expect a panic
+	defer func() {
+		if err := recover(); err == nil {
+			t.Error("Div32 should have panicked when y<=hi")
+		} else if e, ok := err.(runtime.Error); !ok || e.Error() != overflowError {
+			t.Errorf("Div32 expected panic: %q, got: %q ", overflowError, e.Error())
+		}
+	}()
+	q, r := Div32(1, 0, 1)
+	t.Errorf("undefined q, r = %v, %v calculated when Div32 should have panicked", q, r)
+}
+
+func TestDiv64PanicOverflow(t *testing.T) {
+	// Expect a panic
+	defer func() {
+		if err := recover(); err == nil {
+			t.Error("Div64 should have panicked when y<=hi")
+		} else if e, ok := err.(runtime.Error); !ok || e.Error() != overflowError {
+			t.Errorf("Div64 expected panic: %q, got: %q ", overflowError, e.Error())
+		}
+	}()
+	q, r := Div64(1, 0, 1)
+	t.Errorf("undefined q, r = %v, %v calculated when Div64 should have panicked", q, r)
+}
+
+func TestDivPanicZero(t *testing.T) {
+	// Expect a panic
+	defer func() {
+		if err := recover(); err == nil {
+			t.Error("Div should have panicked when y==0")
+		} else if e, ok := err.(runtime.Error); !ok || e.Error() != divZeroError {
+			t.Errorf("Div expected panic: %q, got: %q ", divZeroError, e.Error())
+		}
+	}()
+	q, r := Div(1, 1, 0)
+	t.Errorf("undefined q, r = %v, %v calculated when Div should have panicked", q, r)
+}
+
+func TestDiv32PanicZero(t *testing.T) {
+	// Expect a panic
+	defer func() {
+		if err := recover(); err == nil {
+			t.Error("Div32 should have panicked when y==0")
+		} else if e, ok := err.(runtime.Error); !ok || e.Error() != divZeroError {
+			t.Errorf("Div32 expected panic: %q, got: %q ", divZeroError, e.Error())
+		}
+	}()
+	q, r := Div32(1, 1, 0)
+	t.Errorf("undefined q, r = %v, %v calculated when Div32 should have panicked", q, r)
+}
+
+func TestDiv64PanicZero(t *testing.T) {
+	// Expect a panic
+	defer func() {
+		if err := recover(); err == nil {
+			t.Error("Div64 should have panicked when y==0")
+		} else if e, ok := err.(runtime.Error); !ok || e.Error() != divZeroError {
+			t.Errorf("Div64 expected panic: %q, got: %q ", divZeroError, e.Error())
+		}
+	}()
+	q, r := Div64(1, 1, 0)
+	t.Errorf("undefined q, r = %v, %v calculated when Div64 should have panicked", q, r)
+}
+
 func BenchmarkAdd(b *testing.B) {
 	var z, c uint
 	for i := 0; i < b.N; i++ {
@@ -899,6 +983,21 @@ func BenchmarkAdd64(b *testing.B) {
 	Output = int(z + c)
 }
 
+func BenchmarkAdd64multiple(b *testing.B) {
+	var z0 = uint64(Input)
+	var z1 = uint64(Input)
+	var z2 = uint64(Input)
+	var z3 = uint64(Input)
+	for i := 0; i < b.N; i++ {
+		var c uint64
+		z0, c = Add64(z0, uint64(i), c)
+		z1, c = Add64(z1, uint64(i), c)
+		z2, c = Add64(z2, uint64(i), c)
+		z3, _ = Add64(z3, uint64(i), c)
+	}
+	Output = int(z0 + z1 + z2 + z3)
+}
+
 func BenchmarkSub(b *testing.B) {
 	var z, c uint
 	for i := 0; i < b.N; i++ {
@@ -918,9 +1017,24 @@ func BenchmarkSub32(b *testing.B) {
 func BenchmarkSub64(b *testing.B) {
 	var z, c uint64
 	for i := 0; i < b.N; i++ {
-		z, c = Add64(uint64(Input), uint64(i), c)
+		z, c = Sub64(uint64(Input), uint64(i), c)
 	}
 	Output = int(z + c)
+}
+
+func BenchmarkSub64multiple(b *testing.B) {
+	var z0 = uint64(Input)
+	var z1 = uint64(Input)
+	var z2 = uint64(Input)
+	var z3 = uint64(Input)
+	for i := 0; i < b.N; i++ {
+		var c uint64
+		z0, c = Sub64(z0, uint64(i), c)
+		z1, c = Sub64(z1, uint64(i), c)
+		z2, c = Sub64(z2, uint64(i), c)
+		z3, _ = Sub64(z3, uint64(i), c)
+	}
+	Output = int(z0 + z1 + z2 + z3)
 }
 
 func BenchmarkMul(b *testing.B) {

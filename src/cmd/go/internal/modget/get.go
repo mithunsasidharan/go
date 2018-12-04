@@ -78,7 +78,7 @@ to use newer patch releases when available. Continuing the previous example,
 In general, adding a new dependency may require upgrading
 existing dependencies to keep a working build, and 'go get' does
 this automatically. Similarly, downgrading one dependency may
-require downgrading other dependenceis, and 'go get' does
+require downgrading other dependencies, and 'go get' does
 this automatically as well.
 
 The -m flag instructs get to stop here, after resolving, upgrading,
@@ -281,8 +281,8 @@ func runGet(cmd *base.Command, args []string) {
 				base.Errorf("go get %s: %v", arg, err)
 				continue
 			}
-			if !str.HasFilePathPrefix(abs, modload.ModRoot) {
-				base.Errorf("go get %s: directory %s is outside module root %s", arg, abs, modload.ModRoot)
+			if !str.HasFilePathPrefix(abs, modload.ModRoot()) {
+				base.Errorf("go get %s: directory %s is outside module root %s", arg, abs, modload.ModRoot())
 				continue
 			}
 			// TODO: Check if abs is inside a nested module.
@@ -534,9 +534,11 @@ func runGet(cmd *base.Command, args []string) {
 					// module root.
 					continue
 				}
+				base.Errorf("%s", p.Error)
 			}
 			todo = append(todo, p)
 		}
+		base.ExitIfErrors()
 
 		// If -d was specified, we're done after the download: no build.
 		// (The load.PackagesAndErrors is what did the download

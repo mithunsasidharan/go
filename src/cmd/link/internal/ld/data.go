@@ -48,7 +48,7 @@ import (
 	"sync"
 )
 
-// isRuntimeDepPkg returns whether pkg is the runtime package or its dependency
+// isRuntimeDepPkg reports whether pkg is the runtime package or its dependency
 func isRuntimeDepPkg(pkg string) bool {
 	switch pkg {
 	case "runtime",
@@ -175,8 +175,8 @@ func relocsym(ctxt *Link, s *sym.Symbol) {
 		}
 
 		// We need to be able to reference dynimport symbols when linking against
-		// shared libraries, and Solaris and Darwin need it always
-		if ctxt.HeadType != objabi.Hsolaris && ctxt.HeadType != objabi.Hdarwin && r.Sym != nil && r.Sym.Type == sym.SDYNIMPORT && !ctxt.DynlinkingGo() && !r.Sym.Attr.SubSymbol() {
+		// shared libraries, and Solaris, Darwin and AIX need it always
+		if ctxt.HeadType != objabi.Hsolaris && ctxt.HeadType != objabi.Hdarwin && ctxt.HeadType != objabi.Haix && r.Sym != nil && r.Sym.Type == sym.SDYNIMPORT && !ctxt.DynlinkingGo() && !r.Sym.Attr.SubSymbol() {
 			if !(ctxt.Arch.Family == sys.PPC64 && ctxt.LinkMode == LinkExternal && r.Sym.Name == ".TOC.") {
 				Errorf(s, "unhandled relocation for %s (type %d (%s) rtype %d (%s))", r.Sym.Name, r.Sym.Type, r.Sym.Type, r.Type, sym.RelocName(ctxt.Arch, r.Type))
 			}
@@ -313,6 +313,21 @@ func relocsym(ctxt *Link, s *sym.Symbol) {
 				}
 
 				break
+			}
+
+			// On AIX, a second relocation must be done by the loader,
+			// as section addresses can change once loaded.
+			// The "default" symbol address is still needed by the loader so
+			// the current relocation can't be skipped.
+			if ctxt.HeadType == objabi.Haix && r.Sym.Type != sym.SDYNIMPORT {
+				// It's not possible to make a loader relocation in a
+				// symbol which is not inside .data section.
+				// FIXME: It should be forbidden to have R_ADDR from a
+				// symbol which isn't in .data. However, as .text has the
+				// same address once loaded, this is possible.
+				if s.Sect.Seg == &Segdata {
+					Xcoffadddynrel(ctxt, s, r)
+				}
 			}
 
 			o = Symaddr(r.Sym) + r.Add
@@ -606,6 +621,7 @@ func dynrelocsym(ctxt *Link, s *sym.Symbol) {
 			thearch.Adddynrel(ctxt, s, r)
 			continue
 		}
+
 		if r.Sym != nil && r.Sym.Type == sym.SDYNIMPORT || r.Type >= 256 {
 			if r.Sym != nil && !r.Sym.Attr.Reachable() {
 				Errorf(s, "dynamic relocation to unreachable symbol %s", r.Sym.Name)
@@ -1327,6 +1343,14 @@ func (ctxt *Link) dodata() {
 		datsize = aligndatsize(datsize, s)
 		s.Value = int64(uint64(datsize) - sect.Vaddr)
 		gc.AddSym(s)
+		datsize += s.Size
+	}
+	// On AIX, TOC entries must be the last of .data
+	for _, s := range data[sym.SXCOFFTOC] {
+		s.Sect = sect
+		s.Type = sym.SDATA
+		datsize = aligndatsize(datsize, s)
+		s.Value = int64(uint64(datsize) - sect.Vaddr)
 		datsize += s.Size
 	}
 	checkdatsize(ctxt, datsize, sym.SDATA)

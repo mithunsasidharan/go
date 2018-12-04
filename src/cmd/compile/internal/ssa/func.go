@@ -43,6 +43,7 @@ type Func struct {
 	PrintOrHtmlSSA bool        // true if GOSSAFUNC matches, true even if fe.Log() (spew phase results to stdout) is false.
 
 	scheduled bool // Values in Blocks are in final order
+	laidout   bool // Blocks are ordered
 	NoSplit   bool // true if function is marked as nosplit.  Used by schedule check pass.
 
 	// when register allocation is done, maps value ids to locations
@@ -621,7 +622,7 @@ func (f *Func) invalidateCFG() {
 	f.cachedLoopnest = nil
 }
 
-// DebugHashMatch returns true if environment variable evname
+// DebugHashMatch reports whether environment variable evname
 // 1) is empty (this is a special more-quickly implemented case of 3)
 // 2) is "y" or "Y"
 // 3) is a suffix of the sha1 hash of name
