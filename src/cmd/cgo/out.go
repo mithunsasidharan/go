@@ -6,7 +6,6 @@ package main
 
 import (
 	"bytes"
-	"cmd/internal/xcoff"
 	"debug/elf"
 	"debug/macho"
 	"debug/pe"
@@ -14,6 +13,7 @@ import (
 	"go/ast"
 	"go/printer"
 	"go/token"
+	"internal/xcoff"
 	"io"
 	"io/ioutil"
 	"os"
@@ -776,6 +776,10 @@ func (p *Package) writeExports(fgo2, fm, fgcc, fgcch io.Writer) {
 	fmt.Fprintf(fgcc, "#include <stdlib.h>\n")
 	fmt.Fprintf(fgcc, "#include \"_cgo_export.h\"\n\n")
 
+	// We use packed structs, but they are always aligned.
+	fmt.Fprintf(fgcc, "#pragma GCC diagnostic ignored \"-Wpragmas\"\n")
+	fmt.Fprintf(fgcc, "#pragma GCC diagnostic ignored \"-Waddress-of-packed-member\"\n")
+
 	fmt.Fprintf(fgcc, "extern void crosscall2(void (*fn)(void *, int, __SIZE_TYPE__), void *, int, __SIZE_TYPE__);\n")
 	fmt.Fprintf(fgcc, "extern __SIZE_TYPE__ _cgo_wait_runtime_init_done();\n")
 	fmt.Fprintf(fgcc, "extern void _cgo_release_context(__SIZE_TYPE__);\n\n")
@@ -1255,7 +1259,7 @@ func determineGccgoManglingScheme() bool {
 	cmd := exec.Command(gccgocmd, "-S", "-o", "-", gofilename)
 	buf, cerr := cmd.CombinedOutput()
 	if cerr != nil {
-		fatalf("%s", err)
+		fatalf("%s", cerr)
 	}
 
 	// New mangling: expect go.l..u00e4ufer.Run
@@ -1472,6 +1476,10 @@ __cgo_size_assert(float, 4)
 __cgo_size_assert(double, 8)
 
 extern char* _cgo_topofstack(void);
+
+/* We use packed structs, but they are always aligned.  */
+#pragma GCC diagnostic ignored "-Wpragmas"
+#pragma GCC diagnostic ignored "-Waddress-of-packed-member"
 
 #include <errno.h>
 #include <string.h>

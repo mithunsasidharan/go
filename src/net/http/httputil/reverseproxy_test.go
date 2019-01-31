@@ -7,23 +7,23 @@
 package httputil
 
 import (
+	"bufio"
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"reflect"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
-	"reflect"
-	"io"
-	"strings"
-	"bufio"
-	"sync"
-	"strconv"
-	"bytes"
-	"errors"
-	"fmt"
-	"os"
 )
 
 const fakeHopHeader = "X-Fake-Hop-Header-For-Test"
@@ -1012,8 +1012,17 @@ func TestReverseProxyWebSocket(t *testing.T) {
 	backURL, _ := url.Parse(backendServer.URL)
 	rproxy := NewSingleHostReverseProxy(backURL)
 	rproxy.ErrorLog = log.New(ioutil.Discard, "", 0) // quiet for tests
+	rproxy.ModifyResponse = func(res *http.Response) error {
+		res.Header.Add("X-Modified", "true")
+		return nil
+	}
 
-	frontendProxy := httptest.NewServer(rproxy)
+	handler := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.Header().Set("X-Header", "X-Value")
+		rproxy.ServeHTTP(rw, req)
+	})
+
+	frontendProxy := httptest.NewServer(handler)
 	defer frontendProxy.Close()
 
 	req, _ := http.NewRequest("GET", frontendProxy.URL, nil)
@@ -1028,6 +1037,13 @@ func TestReverseProxyWebSocket(t *testing.T) {
 	if res.StatusCode != 101 {
 		t.Fatalf("status = %v; want 101", res.Status)
 	}
+
+	got := res.Header.Get("X-Header")
+	want := "X-Value"
+	if got != want {
+		t.Errorf("Header(XHeader) = %q; want %q", got, want)
+	}
+
 	if upgradeType(res.Header) != "websocket" {
 		t.Fatalf("not websocket upgrade; got %#v", res.Header)
 	}
@@ -1037,13 +1053,17 @@ func TestReverseProxyWebSocket(t *testing.T) {
 	}
 	defer rwc.Close()
 
+	if got, want := res.Header.Get("X-Modified"), "true"; got != want {
+		t.Errorf("response X-Modified header = %q; want %q", got, want)
+	}
+
 	io.WriteString(rwc, "Hello\n")
 	bs := bufio.NewScanner(rwc)
 	if !bs.Scan() {
 		t.Fatalf("Scan: %v", bs.Err())
 	}
-	got := bs.Text()
-	want := `backend got "Hello"`
+	got = bs.Text()
+	want = `backend got "Hello"`
 	if got != want {
 		t.Errorf("got %#q, want %#q", got, want)
 	}
@@ -1077,4 +1097,27 @@ func TestUnannouncedTrailer(t *testing.T) {
 		t.Errorf("Trailer(X-Unannounced-Trailer) = %q; want %q", g, w)
 	}
 
+}
+
+func TestSingleJoinSlash(t *testing.T) {
+	tests := []struct {
+		slasha   string
+		slashb   string
+		expected string
+	}{
+		{"https://www.google.com/", "/favicon.ico", "https://www.google.com/favicon.ico"},
+		{"https://www.google.com", "/favicon.ico", "https://www.google.com/favicon.ico"},
+		{"https://www.google.com", "favicon.ico", "https://www.google.com/favicon.ico"},
+		{"https://www.google.com", "", "https://www.google.com/"},
+		{"", "favicon.ico", "/favicon.ico"},
+	}
+	for _, tt := range tests {
+		if got := singleJoiningSlash(tt.slasha, tt.slashb); got != tt.expected {
+			t.Errorf("singleJoiningSlash(%s,%s) want %s got %s",
+				tt.slasha,
+				tt.slashb,
+				tt.expected,
+				got)
+		}
+	}
 }

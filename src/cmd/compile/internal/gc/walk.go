@@ -322,6 +322,9 @@ func walkstmt(n *Node) *Node {
 	case ORETJMP:
 		break
 
+	case OINLMARK:
+		break
+
 	case OSELECT:
 		walkselect(n)
 
@@ -563,7 +566,6 @@ opswitch:
 		n = walkinrange(n, init)
 
 	case OPRINT, OPRINTN:
-		walkexprlist(n.List.Slice(), init)
 		n = walkprint(n, init)
 
 	case OPANIC:
@@ -2860,6 +2862,7 @@ func extendslice(n *Node, init *Nodes) *Node {
 	hasPointers := types.Haspointers(elemtype)
 	if hasPointers {
 		clrname = "memclrHasPointers"
+		Curfn.Func.setWBPos(n.Pos)
 	}
 
 	var clr Nodes
